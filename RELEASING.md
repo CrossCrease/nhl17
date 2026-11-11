@@ -18,7 +18,7 @@ Packages are built from an allowlist. The script never includes game files, `gam
 ## Steps
 
 1. Build the runtime: `powershell -NoProfile -ExecutionPolicy Bypass -File tools\build_windows.ps1`, then copy the resulting `shadPS4.exe` into `runtime\` as usual.
-2. Set the version in `tools\release\VERSION` (semantic versioning; use `-rc.1` etc. for prereleases).
+2. Set the version in `tools\release\VERSION` and add an entry to `CHANGELOG.md` (semantic versioning; use `-rc.1` etc. for prereleases).
 3. If the default player configuration changed, update `tools\release\defaults\user\config.json` / `users.json`. They must not contain personal addresses, online IDs or credentials.
 4. Package:
 
