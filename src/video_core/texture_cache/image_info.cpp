@@ -94,12 +94,18 @@ ImageInfo::ImageInfo(const AmdGpu::DepthBuffer& buffer, u32 num_slices, VAddr ht
                      AmdGpu::CbDbExtent hint, bool write_buffer) noexcept {
     tile_mode = buffer.GetTileMode();
     array_mode = AmdGpu::GetArrayMode(tile_mode);
-    pixel_format = LiverpoolToVK::DepthFormat(buffer.z_info.format, buffer.stencil_info.format);
+    const bool depth_valid = write_buffer ? buffer.DepthWriteValid() : buffer.DepthValid();
+    const bool stencil_valid = write_buffer ? buffer.StencilWriteValid() : buffer.StencilValid();
+    const auto z_format =
+        depth_valid ? buffer.z_info.format : AmdGpu::DepthBuffer::ZFormat::Invalid;
+    const auto stencil_format =
+        stencil_valid ? buffer.stencil_info.format : AmdGpu::DepthBuffer::StencilFormat::Invalid;
+    pixel_format = LiverpoolToVK::DepthFormat(z_format, stencil_format);
     type = AmdGpu::ImageType::Color2D;
     props = ImageProperties{
         .is_tiled = buffer.IsTiled(),
         .is_depth = true,
-        .has_stencil = buffer.stencil_info.format != AmdGpu::DepthBuffer::StencilFormat::Invalid,
+        .has_stencil = stencil_valid,
     };
     num_samples = buffer.NumSamples();
     num_bits = buffer.NumBits();
@@ -110,7 +116,8 @@ ImageInfo::ImageInfo(const AmdGpu::DepthBuffer& buffer, u32 num_slices, VAddr ht
     resources.layers = num_slices;
     meta_info.htile_addr = buffer.z_info.tile_surface_enable ? htile_address : 0;
 
-    stencil_addr = write_buffer ? buffer.StencilWriteAddress() : buffer.StencilAddress();
+    stencil_addr =
+        stencil_valid ? (write_buffer ? buffer.StencilWriteAddress() : buffer.StencilAddress()) : 0;
     if (props.has_stencil) {
         if (props.is_tiled) {
             stencil_size = buffer.GetStencilSliceSize() * resources.layers;
@@ -121,7 +128,7 @@ ImageInfo::ImageInfo(const AmdGpu::DepthBuffer& buffer, u32 num_slices, VAddr ht
         }
     }
 
-    if (buffer.z_info.format != AmdGpu::DepthBuffer::ZFormat::Invalid) {
+    if (depth_valid) {
         guest_address = write_buffer ? buffer.DepthWriteAddress() : buffer.DepthAddress();
         if (props.is_tiled) {
             guest_size = buffer.GetDepthSliceSize() * resources.layers;

@@ -3,10 +3,12 @@
 
 #include "common/alignment.h"
 #include "video_core/buffer_cache/buffer.h"
+#include "video_core/host_shaders/depth_convert_comp.h"
 #include "video_core/renderer_vulkan/liverpool_to_vk.h"
 #include "video_core/renderer_vulkan/vk_instance.h"
 #include "video_core/renderer_vulkan/vk_runtime.h"
 #include "video_core/renderer_vulkan/vk_scheduler.h"
+#include "video_core/renderer_vulkan/vk_shader_util.h"
 #include "video_core/texture_cache/blit_helper.h"
 #include "video_core/texture_cache/image.h"
 
@@ -83,7 +85,15 @@ static u32 BufferImageCopySize(const vk::BufferImageCopy& copy, const vk::Format
     const u32 height = copy.bufferImageHeight ? copy.bufferImageHeight : copy.imageExtent.height;
 
     const auto block = vk::blockExtent(pixel_format);
-    const u32 block_size = vk::blockSize(pixel_format);
+    u32 block_size = vk::blockSize(pixel_format);
+    if (copy.imageSubresource.aspectMask == vk::ImageAspectFlagBits::eDepth) {
+        block_size =
+            pixel_format == vk::Format::eD16Unorm || pixel_format == vk::Format::eD16UnormS8Uint
+                ? 2
+                : 4;
+    } else if (copy.imageSubresource.aspectMask == vk::ImageAspectFlagBits::eStencil) {
+        block_size = 1;
+    }
     const u32 row_pitch = (row_length / block[0]) * block_size;
     const u32 slice_pitch = (height / block[1]) * row_pitch;
 
@@ -173,11 +183,36 @@ void Runtime::UploadImage(VideoCore::Image* dst, const VideoCore::Buffer* src,
     SetBackingSamples(dst, dst->info.num_samples, false);
     scheduler.EndRendering();
 
+    const auto host_format = dst->backing->image.image_ci.format;
+    SmallVector<vk::BufferImageCopy, 8> converted_copies;
+    if (dst->info.pixel_format == vk::Format::eD16UnormS8Uint &&
+        host_format != dst->info.pixel_format) {
+        u64 size = 0;
+        for (const auto& copy : upload_copies) {
+            auto converted = copy;
+            converted.bufferOffset = size;
+            converted_copies.push_back(converted);
+            size += Common::AlignUp<u64>(BufferImageCopySize(copy, host_format), 256);
+        }
+        const auto staging =
+            staging_pool.Request(size, VideoCore::MemoryType::DeviceLocal, 256, false, true);
+        for (u32 i = 0; i < upload_copies.size(); ++i) {
+            const auto& copy = upload_copies[i];
+            auto& converted = converted_copies[i];
+            converted.bufferOffset += staging.offset;
+            ASSERT(copy.imageSubresource.aspectMask == vk::ImageAspectFlagBits::eDepth);
+            ConvertDepthBuffer(src, copy.bufferOffset, staging.buffer, converted.bufferOffset,
+                               BufferImageCopySize(copy, host_format) / 4, host_format, false);
+        }
+        src = staging.buffer;
+        upload_copies = converted_copies;
+    }
+
     bool needs_flush =
         Transit(dst, vk::ImageLayout::eTransferDstOptimal, vk::PipelineStageFlagBits2::eCopy,
                 vk::AccessFlagBits2::eTransferWrite);
     for (const auto& copy : upload_copies) {
-        const auto copy_size = BufferImageCopySize(copy, dst->info.pixel_format);
+        const auto copy_size = BufferImageCopySize(copy, host_format);
         needs_flush |= IsBufferAccessed(src, copy.bufferOffset, copy_size);
     }
     if (needs_flush) {
@@ -189,7 +224,7 @@ void Runtime::UploadImage(VideoCore::Image* dst, const VideoCore::Buffer* src,
                              upload_copies);
 
     for (const auto& copy : upload_copies) {
-        const auto copy_size = BufferImageCopySize(copy, dst->info.pixel_format);
+        const auto copy_size = BufferImageCopySize(copy, host_format);
         AccessBuffer(src, copy.bufferOffset, copy_size, vk::PipelineStageFlagBits2::eCopy,
                      vk::AccessFlagBits2::eTransferRead);
     }
@@ -202,11 +237,33 @@ void Runtime::DownloadImage(VideoCore::Image* src, const VideoCore::Buffer* dst,
     SetBackingSamples(src, src->info.num_samples);
     scheduler.EndRendering();
 
+    const auto host_format = src->backing->image.image_ci.format;
+    const auto original_copies = download_copies;
+    const auto* original_dst = dst;
+    SmallVector<vk::BufferImageCopy, 8> converted_copies;
+    if (src->info.pixel_format == vk::Format::eD16UnormS8Uint &&
+        host_format != src->info.pixel_format) {
+        u64 size = 0;
+        for (const auto& copy : download_copies) {
+            auto converted = copy;
+            converted.bufferOffset = size;
+            converted_copies.push_back(converted);
+            size += Common::AlignUp<u64>(BufferImageCopySize(copy, host_format), 256);
+        }
+        const auto staging =
+            staging_pool.Request(size, VideoCore::MemoryType::DeviceLocal, 256, false, true);
+        for (auto& copy : converted_copies) {
+            copy.bufferOffset += staging.offset;
+        }
+        dst = staging.buffer;
+        download_copies = converted_copies;
+    }
+
     bool needs_flush =
         Transit(src, vk::ImageLayout::eTransferSrcOptimal, vk::PipelineStageFlagBits2::eCopy,
                 vk::AccessFlagBits2::eTransferRead);
     for (const auto& copy : download_copies) {
-        const auto copy_size = BufferImageCopySize(copy, src->info.pixel_format);
+        const auto copy_size = BufferImageCopySize(copy, host_format);
         needs_flush |= IsBufferAccessed(dst, copy.bufferOffset, copy_size, true);
     }
     if (needs_flush) {
@@ -218,10 +275,101 @@ void Runtime::DownloadImage(VideoCore::Image* src, const VideoCore::Buffer* dst,
                              download_copies);
 
     for (const auto& copy : download_copies) {
-        const auto copy_size = BufferImageCopySize(copy, src->info.pixel_format);
+        const auto copy_size = BufferImageCopySize(copy, host_format);
         AccessBuffer(dst, copy.bufferOffset, copy_size, vk::PipelineStageFlagBits2::eCopy,
                      vk::AccessFlagBits2::eTransferWrite);
     }
+    if (!converted_copies.empty()) {
+        for (u32 i = 0; i < original_copies.size(); ++i) {
+            const auto& copy = original_copies[i];
+            ASSERT(copy.imageSubresource.aspectMask == vk::ImageAspectFlagBits::eDepth);
+            ConvertDepthBuffer(dst, converted_copies[i].bufferOffset, original_dst,
+                               copy.bufferOffset, BufferImageCopySize(copy, host_format) / 4,
+                               host_format, true);
+        }
+    }
+}
+
+void Runtime::ConvertDepthBuffer(const VideoCore::Buffer* src, u64 src_offset,
+                                 const VideoCore::Buffer* dst, u64 dst_offset, u32 count,
+                                 vk::Format host_format, bool pack_depth) {
+    const auto device = instance.GetDevice();
+    if (!depth_convert_pipeline) {
+        std::array<vk::DescriptorSetLayoutBinding, 2> bindings{};
+        for (u32 i = 0; i < bindings.size(); ++i) {
+            bindings[i] = {i, vk::DescriptorType::eStorageBuffer, 1,
+                           vk::ShaderStageFlagBits::eCompute};
+        }
+        const vk::DescriptorSetLayoutCreateInfo set_ci{
+            .flags = vk::DescriptorSetLayoutCreateFlagBits::ePushDescriptorKHR,
+            .bindingCount = static_cast<u32>(bindings.size()),
+            .pBindings = bindings.data(),
+        };
+        auto [set_result, set_layout] = device.createDescriptorSetLayoutUnique(set_ci);
+        ASSERT(set_result == vk::Result::eSuccess);
+        depth_convert_set_layout = std::move(set_layout);
+        const vk::PushConstantRange constants{vk::ShaderStageFlagBits::eCompute, 0,
+                                              5 * sizeof(u32)};
+        const auto layout_handle = *depth_convert_set_layout;
+        const vk::PipelineLayoutCreateInfo layout_ci{
+            .setLayoutCount = 1,
+            .pSetLayouts = &layout_handle,
+            .pushConstantRangeCount = 1,
+            .pPushConstantRanges = &constants,
+        };
+        auto [layout_result, layout] = device.createPipelineLayoutUnique(layout_ci);
+        ASSERT(layout_result == vk::Result::eSuccess);
+        depth_convert_layout = std::move(layout);
+        const auto module = CompileSPV(DEPTH_CONVERT_COMP, device);
+        const vk::ComputePipelineCreateInfo pipeline_ci{
+            .stage = {.stage = vk::ShaderStageFlagBits::eCompute,
+                      .module = module,
+                      .pName = "main"},
+            .layout = *depth_convert_layout,
+        };
+        auto [pipeline_result, pipeline] = device.createComputePipelineUnique({}, pipeline_ci);
+        ASSERT(pipeline_result == vk::Result::eSuccess);
+        depth_convert_pipeline = std::move(pipeline);
+        device.destroyShaderModule(module);
+    }
+
+    const u64 src_size = u64(count) * (pack_depth ? 4 : 2);
+    const u64 dst_size = u64(count) * (pack_depth ? 2 : 4);
+    ASSERT(src_offset % 4 == 0 && dst_offset % 4 == 0);
+    ASSERT(src_offset + Common::AlignUp<u64>(src_size, 4) <= src->SizeBytes());
+    ASSERT(dst_offset + Common::AlignUp<u64>(dst_size, 4) <= dst->SizeBytes());
+    if (IsBufferAccessed(src, src_offset, src_size) |
+        IsBufferAccessed(dst, dst_offset, dst_size, true)) {
+        FlushBarriers();
+    }
+    const u64 alignment = instance.StorageMinAlignment();
+    const u64 src_base = Common::AlignDown(src_offset, alignment);
+    const u64 dst_base = Common::AlignDown(dst_offset, alignment);
+    const std::array<vk::DescriptorBufferInfo, 2> buffers{{
+        {src->Handle(), src_base, Common::AlignUp(src_offset - src_base + src_size, u64(4))},
+        {dst->Handle(), dst_base, Common::AlignUp(dst_offset - dst_base + dst_size, u64(4))},
+    }};
+    std::array<vk::WriteDescriptorSet, 2> writes{};
+    for (u32 i = 0; i < writes.size(); ++i) {
+        writes[i] = {.dstBinding = i,
+                     .descriptorCount = 1,
+                     .descriptorType = vk::DescriptorType::eStorageBuffer,
+                     .pBufferInfo = &buffers[i]};
+    }
+    const std::array<u32, 5> constants{
+        u32((src_offset - src_base) / 4), u32((dst_offset - dst_base) / 4), count,
+        u32(host_format == vk::Format::eD32SfloatS8Uint), u32(pack_depth)};
+    const auto cmdbuf = scheduler.CommandBuffer();
+    cmdbuf.bindPipeline(vk::PipelineBindPoint::eCompute, *depth_convert_pipeline);
+    cmdbuf.pushDescriptorSetKHR(vk::PipelineBindPoint::eCompute, *depth_convert_layout, 0, writes);
+    cmdbuf.pushConstants(*depth_convert_layout, vk::ShaderStageFlagBits::eCompute, 0,
+                         sizeof(constants), constants.data());
+    const u32 groups = (count + 127) / 128;
+    cmdbuf.dispatch(std::min(groups, 65535u), (groups + 65534) / 65535, 1);
+    AccessBuffer(src, src_offset, src_size, vk::PipelineStageFlagBits2::eComputeShader,
+                 vk::AccessFlagBits2::eShaderRead);
+    AccessBuffer(dst, dst_offset, dst_size, vk::PipelineStageFlagBits2::eComputeShader,
+                 vk::AccessFlagBits2::eShaderRead | vk::AccessFlagBits2::eShaderWrite);
 }
 
 void Runtime::CopyImage(VideoCore::Image* src, VideoCore::Image* dst) {

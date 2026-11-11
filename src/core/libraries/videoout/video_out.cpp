@@ -5,6 +5,7 @@
 #include "common/elf_info.h"
 #include "common/logging/log.h"
 #include "core/emulator_settings.h"
+#include "core/libraries/kernel/time.h"
 #include "core/libraries/libs.h"
 #include "core/libraries/system/userservice.h"
 #include "core/libraries/videoout/driver.h"
@@ -139,7 +140,7 @@ s32 PS4_SYSV_ABI sceVideoOutRegisterBuffers(s32 handle, s32 startIndex, void* co
 }
 
 s32 PS4_SYSV_ABI sceVideoOutSetFlipRate(s32 handle, s32 rate) {
-    LOG_TRACE(Lib_VideoOut, "called");
+    LOG_INFO(Lib_VideoOut, "Flip rate: handle={} rate={}", handle, rate);
     driver->GetPort(handle)->flip_rate = rate;
     return ORBIS_OK;
 }
@@ -348,10 +349,22 @@ s32 sceVideoOutSubmitEopFlip(s32 handle, u32 buf_id, u32 mode, s64 flip_arg, voi
         return ORBIS_VIDEO_OUT_ERROR_INVALID_HANDLE;
     }
 
+    {
+        std::scoped_lock lock{port->port_mutex};
+        if (port->flip_status.flip_pending_num > 16) {
+            return ORBIS_VIDEO_OUT_ERROR_FLIP_QUEUE_FULL;
+        }
+        ++port->flip_status.gc_queue_num;
+        ++port->flip_status.flip_pending_num;
+        port->flip_status.submit_tsc = Kernel::sceKernelReadTsc();
+    }
+
     Platform::IrqC::Instance()->RegisterOnce(
         Platform::InterruptId::GfxFlip, [=](Platform::InterruptId irq) {
             ASSERT_MSG(irq == Platform::InterruptId::GfxFlip, "An unexpected IRQ occured");
-            ASSERT_MSG(port->buffer_labels[buf_id] == 1, "Out of order flip IRQ");
+            ASSERT_MSG(port->buffer_labels[buf_id] == 1,
+                       "Out of order flip IRQ: buffer={} label={} flip_arg={}", buf_id,
+                       port->buffer_labels[buf_id], flip_arg);
             const auto result = driver->SubmitFlip(port, buf_id, flip_arg, true);
             ASSERT_MSG(result, "EOP flip submission failed");
         });

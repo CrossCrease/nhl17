@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include "common/debug.h"
+#include "common/performance_scope.h"
 #include "core/debug_state.h"
 #include "core/emulator_settings.h"
 #include "core/memory.h"
@@ -182,6 +183,7 @@ void Rasterizer::EliminateFastClear() {
 }
 
 void Rasterizer::Draw(bool is_indexed, u32 index_offset) {
+    PERFORMANCE_SCOPE("RecordDraw");
     RENDERER_TRACE;
 
     scheduler.PopPendingOperations();
@@ -317,6 +319,7 @@ void Rasterizer::DrawIndirect(bool is_indexed, VAddr arg_address, u32 offset, u3
 }
 
 void Rasterizer::DispatchDirect() {
+    PERFORMANCE_SCOPE("RecordDispatch");
     RENDERER_TRACE;
 
     scheduler.PopPendingOperations();
@@ -952,6 +955,12 @@ void Rasterizer::BindTextures(const Shader::Info& stage, Shader::Backend::Bindin
                         vk::AccessFlagBits2::eShaderRead | vk::AccessFlagBits2::eShaderWrite,
                         desc.view_info.range);
                 }
+            } else if (image.info.props.is_depth && binding.is_target &&
+                       instance.IsAttachmentFeedbackLoopLayoutSupported()) {
+                needs_barrier |=
+                    runtime.Transit(&image, vk::ImageLayout::eAttachmentFeedbackLoopOptimalEXT,
+                                    vk::PipelineStageFlagBits2::eAllGraphics,
+                                    vk::AccessFlagBits2::eShaderRead, desc.view_info.range);
             } else {
                 if (is_storage) {
                     needs_barrier |= runtime.Transit(
@@ -1022,7 +1031,7 @@ void Rasterizer::BindTextures(const Shader::Info& stage, Shader::Backend::Bindin
 }
 
 RenderState Rasterizer::BeginRendering(const GraphicsPipeline* pipeline) {
-    attachment_feedback_loop = false;
+    attachment_feedback_loop = {};
     const auto& regs = liverpool->regs;
     const auto& key = pipeline->GetGraphicsKey();
     RenderState state;
@@ -1065,7 +1074,7 @@ RenderState Rasterizer::BeginRendering(const GraphicsPipeline* pipeline) {
                                 vk::PipelineStageFlagBits2::eColorAttachmentOutput,
                                 vk::AccessFlagBits2::eColorAttachmentWrite |
                                     vk::AccessFlagBits2::eColorAttachmentRead);
-            attachment_feedback_loop = true;
+            attachment_feedback_loop |= vk::ImageAspectFlagBits::eColor;
         } else {
             needs_barrier |= runtime.Transit(image, vk::ImageLayout::eColorAttachmentOptimal,
                                              vk::PipelineStageFlagBits2::eColorAttachmentOutput,
@@ -1112,13 +1121,17 @@ RenderState Rasterizer::BeginRendering(const GraphicsPipeline* pipeline) {
         // Stencil writes can be enabled while depth writes are off.
         const bool stencil_write =
             has_stencil && regs.depth_control.stencil_enable && !desc.view_info.is_storage;
-        const auto new_layout = desc.view_info.is_storage
-                                    ? has_stencil ? vk::ImageLayout::eDepthStencilAttachmentOptimal
-                                                  : vk::ImageLayout::eDepthAttachmentOptimal
-                                : stencil_write
-                                    ? vk::ImageLayout::eDepthReadOnlyStencilAttachmentOptimal
-                                : has_stencil ? vk::ImageLayout::eDepthStencilReadOnlyOptimal
-                                              : vk::ImageLayout::eDepthReadOnlyOptimal;
+        auto new_layout = desc.view_info.is_storage
+                              ? has_stencil ? vk::ImageLayout::eDepthStencilAttachmentOptimal
+                                            : vk::ImageLayout::eDepthAttachmentOptimal
+                          : stencil_write ? vk::ImageLayout::eDepthReadOnlyStencilAttachmentOptimal
+                          : has_stencil   ? vk::ImageLayout::eDepthStencilReadOnlyOptimal
+                                          : vk::ImageLayout::eDepthReadOnlyOptimal;
+        if (image.binding.is_bound && instance.IsAttachmentFeedbackLoopLayoutSupported()) {
+            runtime.FlushBarriers();
+            new_layout = vk::ImageLayout::eAttachmentFeedbackLoopOptimalEXT;
+            attachment_feedback_loop |= image.aspect_mask;
+        }
         needs_barrier |= runtime.Transit(&image, new_layout,
                                          vk::PipelineStageFlagBits2::eEarlyFragmentTests |
                                              vk::PipelineStageFlagBits2::eLateFragmentTests,

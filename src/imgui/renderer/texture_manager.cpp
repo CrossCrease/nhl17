@@ -7,6 +7,7 @@
 #include <imgui.h>
 #include "common/assert.h"
 #include "common/io_file.h"
+#include "common/performance_scope.h"
 #include "common/polyfill_thread.h"
 #include "common/stb.h"
 #include "common/thread.h"
@@ -240,12 +241,14 @@ void Submit() {
         }
     }
     if (upload.core != nullptr) {
+        PERFORMANCE_SCOPE("UploadUiTexture");
         upload.core->upload_data.Upload();
         upload.core->texture_id = upload.core->upload_data.im_texture;
         if (upload.core->count.fetch_sub(1) == 1) {
             delete upload.core;
         }
     } else {
+        PERFORMANCE_SCOPE("DestroyUiTexture");
         upload.data.Destroy();
     }
 }

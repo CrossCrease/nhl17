@@ -2,10 +2,13 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include <algorithm>
+#include <charconv>
+#include <cstdlib>
 #include <magic_enum/magic_enum.hpp>
 #include <xxhash.h>
 
 #include "common/alignment.h"
+#include "common/performance_scope.h"
 #include "core/debug_state.h"
 #include "core/memory.h"
 #include "video_core/amdgpu/liverpool.h"
@@ -140,7 +143,20 @@ void BufferCache::ReadMemory(VAddr device_addr, u64 size, bool is_write, bool as
 
         // GPU-modified ranges come as many small scattered islands,
         // so the download is widened to a window around the request
-        constexpr u64 WindowSize = 512_KB;
+        static const u64 WindowSize = []() -> u64 {
+            const char* value = std::getenv("SHADPS4_BUFFER_READBACK_KIB");
+            if (!value) {
+                return 512_KB;
+            }
+            const std::string_view text{value};
+            u64 kib{};
+            const auto [end, error] = std::from_chars(text.data(), text.data() + text.size(), kib);
+            if (error != std::errc{} || end != text.data() + text.size() || kib < 64 ||
+                kib > 4096 || !std::has_single_bit(kib)) {
+                return 512_KB;
+            }
+            return kib * 1024;
+        }();
         const VAddr arena_end = arena->cpu_addr + arena->size_bytes;
         const VAddr window_start =
             std::max<VAddr>(Common::AlignDown(device_addr, WindowSize), arena->cpu_addr);
@@ -159,6 +175,7 @@ void BufferCache::ReadMemory(VAddr device_addr, u64 size, bool is_write, bool as
 }
 
 void BufferCache::DownloadMemory(const Buffer* arena, VAddr device_addr, u64 size, bool async) {
+    PERFORMANCE_SCOPE("DownloadBufferMemory");
     boost::container::small_vector<vk::BufferCopy, 1> copies;
     u64 total_size_bytes = 0;
     const VAddr arena_base = arena->cpu_addr;
@@ -449,6 +466,7 @@ void BufferCache::EnsureResident(const Buffer* arena, u64 first_block, u64 last_
 
 bool BufferCache::SynchronizeMemory(const Buffer* arena, VAddr device_addr, u32 size,
                                     bool is_written, bool is_texel_buffer) {
+    PERFORMANCE_SCOPE("SynchronizeBufferMemory");
     boost::container::small_vector<vk::BufferCopy, 4> copies;
     size_t total_size_bytes{};
     memory_tracker->ForEachUploadRange(device_addr, size, is_written, [&](u64 addr, u64 size) {

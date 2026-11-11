@@ -1,0 +1,50 @@
+// SPDX-FileCopyrightText: Copyright 2026 shadPS4 Emulator Project
+// SPDX-License-Identifier: GPL-2.0-or-later
+
+#version 450
+
+layout(local_size_x = 64) in;
+layout(set = 0, binding = 0, std430) readonly buffer Source {
+    uint source[];
+};
+layout(set = 0, binding = 1, std430) buffer Destination {
+    uint destination[];
+};
+layout(push_constant) uniform Parameters {
+    uint source_offset;
+    uint destination_offset;
+    uint count;
+    uint float_depth;
+    uint pack_depth;
+};
+
+uint expand_depth(uint value) {
+    if (float_depth != 0) {
+        return floatBitsToUint(float(value) / 65535.0);
+    }
+    return value * 256u + (value * 255u + 32767u) / 65535u;
+}
+
+uint compress_depth(uint value) {
+    float depth = float_depth != 0 ? uintBitsToFloat(value) : float(value & 0xffffffu) / 16777215.0;
+    return uint(round(clamp(depth, 0.0, 1.0) * 65535.0));
+}
+
+void main() {
+    uint index = (gl_GlobalInvocationID.y * 65535u * 64u + gl_GlobalInvocationID.x) * 2u;
+    if (index >= count) {
+        return;
+    }
+    if (pack_depth != 0) {
+        uint lo = compress_depth(source[source_offset + index]);
+        uint hi = index + 1u < count ? compress_depth(source[source_offset + index + 1u]) :
+                  destination[destination_offset + index / 2u] >> 16u;
+        destination[destination_offset + index / 2u] = lo | (hi << 16u);
+    } else {
+        uint packed = source[source_offset + index / 2u];
+        destination[destination_offset + index] = expand_depth(packed & 0xffffu);
+        if (index + 1u < count) {
+            destination[destination_offset + index + 1u] = expand_depth(packed >> 16u);
+        }
+    }
+}

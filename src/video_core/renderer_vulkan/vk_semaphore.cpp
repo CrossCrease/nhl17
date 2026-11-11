@@ -6,6 +6,7 @@
 #include "video_core/renderer_vulkan/vk_semaphore.h"
 
 #include "common/assert.h"
+#include "common/performance_scope.h"
 
 namespace Vulkan {
 
@@ -45,6 +46,7 @@ void Semaphore::Refresh() {
 }
 
 void Semaphore::Wait(u64 tick) {
+    PERFORMANCE_SCOPE("SemaphoreWait");
     // No need to wait if the GPU is ahead of the tick
     if (IsFree(tick)) {
         return;

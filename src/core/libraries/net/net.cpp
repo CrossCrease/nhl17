@@ -11,6 +11,8 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
+#include <fstream>
 #include <iterator>
 #include <mutex>
 #include <optional>
@@ -18,6 +20,7 @@
 #include <source_location>
 #include <span>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <vector>
 #include <fmt/format.h>
@@ -47,6 +50,80 @@ namespace {
 using Host::Error;
 
 thread_local s32 g_net_errno = 0;
+
+struct NetCaptureState {
+    NetCaptureState() {
+        const char* path = std::getenv("SHADPS4_NET_CAPTURE_DIR");
+        if (path == nullptr || path[0] == '\0') {
+            return;
+        }
+        directory = path;
+        std::error_code error;
+        std::filesystem::create_directories(directory, error);
+        if (error) {
+            LOG_ERROR(Lib_Net, "network capture directory could not be created: {}",
+                      error.message());
+            return;
+        }
+        events.open(directory / "events.tsv", std::ios::binary | std::ios::trunc);
+        if (!events) {
+            LOG_ERROR(Lib_Net, "network capture manifest could not be opened: {}",
+                      (directory / "events.tsv").string());
+            return;
+        }
+        events << "utc_us\tsequence\tevent\tsocket\tresult\tflags\taddress\tpayload\n";
+        events.flush();
+        enabled = true;
+        LOG_INFO(Lib_Net, "network capture enabled at {}", directory.string());
+    }
+
+    static std::string Field(std::string value) {
+        for (char& c : value) {
+            if (c == '\t' || c == '\r' || c == '\n') {
+                c = ' ';
+            }
+        }
+        return value;
+    }
+
+    void Write(std::string_view event, OrbisNetId socket, s64 result, s32 flags,
+               std::string address, const void* payload = nullptr, size_t payload_size = 0) {
+        if (!enabled) {
+            return;
+        }
+        std::scoped_lock lock{mutex};
+        const u64 current = ++sequence;
+        std::string payload_name;
+        if (payload != nullptr && payload_size != 0) {
+            payload_name = fmt::format("{:08}-{}-s{}.bin", current, event, socket);
+            std::ofstream output(directory / payload_name, std::ios::binary | std::ios::trunc);
+            output.write(static_cast<const char*>(payload),
+                         static_cast<std::streamsize>(payload_size));
+            if (!output) {
+                LOG_ERROR(Lib_Net, "network capture payload write failed: {}", payload_name);
+                payload_name.clear();
+            }
+        }
+        const auto utc_us = std::chrono::duration_cast<std::chrono::microseconds>(
+                                std::chrono::system_clock::now().time_since_epoch())
+                                .count();
+        events << utc_us << '\t' << current << '\t' << event << '\t' << socket << '\t' << result
+               << '\t' << flags << '\t' << Field(std::move(address)) << '\t' << payload_name
+               << '\n';
+        events.flush();
+    }
+
+    std::filesystem::path directory;
+    std::ofstream events;
+    std::mutex mutex;
+    u64 sequence = 0;
+    bool enabled = false;
+};
+
+NetCaptureState& GetNetCapture() {
+    static NetCaptureState capture;
+    return capture;
+}
 
 constexpr s32 FirstPoolId = 3000;
 constexpr size_t MaxPools = 31;
@@ -1009,6 +1086,7 @@ s32 PS4_SYSV_ABI sceNetConfigWlanSetDeviceConfig() {
 
 s32 PS4_SYSV_ABI sceNetConnect(OrbisNetId s, const OrbisNetSockaddr* addr, u32 addrlen) {
     LOG_DEBUG(Lib_Net, "s = {}, addr = {}", s, FormatSockaddr(addr, addrlen));
+    GetNetCapture().Write("connect", s, 0, 0, FormatSockaddr(addr, addrlen));
     Core::Net::SocketInfo info{};
     if (const auto r = Core::Net::SocketGetInfo(s, &info); r.error != Error::Ok) {
         return Return(r);
@@ -2013,6 +2091,11 @@ s32 PS4_SYSV_ABI sceNetRecvfrom(OrbisNetId s, void* buf, u64 len, s32 flags, Orb
         if (addr != nullptr && paddrlen != nullptr) {
             NoteP2PPeer(s, false, addr, *paddrlen);
         }
+        GetNetCapture().Write("recv", s, r, flags,
+                              addr != nullptr && paddrlen != nullptr
+                                  ? FormatSockaddr(addr, *paddrlen)
+                                  : "connected peer",
+                              buf, static_cast<size_t>(r));
     }
     LOG_TRACE(Lib_Net, "s = {}, len = {}, flags = {:#x} -> {}{}", s, len, flags,
               r >= 0 ? std::to_string(r) : ErrorCodeName(r),
@@ -2164,6 +2247,7 @@ s32 PS4_SYSV_ABI sceNetResolverStartNtoa(OrbisNetId rid, const char* hostname, O
                                          s32 timeout, s32 retry, s32 flags) {
     LOG_INFO(Lib_Net, "rid = {}, hostname = {}, timeout = {}, retry = {}, flags = {:#x}", rid,
              hostname != nullptr ? hostname : "", timeout, retry, flags);
+    GetNetCapture().Write("resolve", rid, 0, flags, hostname != nullptr ? hostname : "");
     return ResolverReturn(
         ResolverStartNtoa(rid, hostname, {addr, nullptr}, (flags & ORBIS_NET_RESOLVER_ASYNC) != 0,
                           (flags & ORBIS_NET_RESOLVER_START_NTOA_DISABLE_IPADDRESS) != 0));
@@ -2180,6 +2264,7 @@ s32 PS4_SYSV_ABI sceNetResolverStartNtoaMultipleRecords(OrbisNetId rid, const ch
                                                         s32 retry, s32 flags) {
     LOG_INFO(Lib_Net, "rid = {}, hostname = {}, timeout = {}, retry = {}, flags = {:#x}", rid,
              hostname != nullptr ? hostname : "", timeout, retry, flags);
+    GetNetCapture().Write("resolve", rid, 0, flags, hostname != nullptr ? hostname : "");
     return ResolverReturn(
         ResolverStartNtoa(rid, hostname, {nullptr, info}, (flags & ORBIS_NET_RESOLVER_ASYNC) != 0,
                           (flags & ORBIS_NET_RESOLVER_START_NTOA_DISABLE_IPADDRESS) != 0));
@@ -2192,6 +2277,7 @@ s32 PS4_SYSV_ABI sceNetResolverStartNtoaMultipleRecordsEx(OrbisNetId rid, const 
                                                           s32 retry, s32 flags) {
     LOG_INFO(Lib_Net, "rid = {}, hostname = {}, timeout = {}, retry = {}, flags = {:#x}", rid,
              hostname != nullptr ? hostname : "", timeout, retry, flags);
+    GetNetCapture().Write("resolve", rid, 0, flags, hostname != nullptr ? hostname : "");
     constexpr u32 Aaaa = 0x1000000;
     constexpr u32 AAndAaaa = 0x2000000;
     if ((static_cast<u32>(flags) & 0xfccefffeu) != 0) {
@@ -2309,6 +2395,9 @@ s32 PS4_SYSV_ABI sceNetSendto(OrbisNetId s, const void* buf, u64 len, s32 flags,
     if (r > 0) {
         CountTraffic(s, true, r);
         NoteP2PPeer(s, true, addr, addrlen);
+        GetNetCapture().Write("send", s, r, flags,
+                              addr != nullptr ? FormatSockaddr(addr, addrlen) : "connected peer",
+                              buf, static_cast<size_t>(r));
     }
     LOG_TRACE(Lib_Net, "s = {}, len = {}, flags = {:#x}, to = {} -> {}", s, len, flags,
               addr != nullptr ? FormatSockaddr(addr, addrlen) : "connected peer",
@@ -2684,6 +2773,7 @@ OrbisNetId PS4_SYSV_ABI sceNetSocket(const char* name, s32 family, s32 type, s32
     const OrbisNetId r = sceNetSocketImpl(name, family, type, protocol);
     LOG_INFO(Lib_Net, "'{}' family {} {} protocol {} -> {}", name != nullptr ? name : "", family,
              SocketTypeName(type), protocol, r >= 0 ? std::to_string(r) : ErrorCodeName(r));
+    GetNetCapture().Write("socket", r, r, 0, name != nullptr ? name : "");
     return r;
 }
 
@@ -2697,7 +2787,9 @@ s32 PS4_SYSV_ABI sceNetSocketClose(OrbisNetId s) {
     if (r.error == Error::Ok) {
         LogSocketClosed(s);
     }
-    return Return(r);
+    const s32 result = Return(r);
+    GetNetCapture().Write("close", s, result, 0, "");
+    return result;
 }
 
 s32 PS4_SYSV_ABI sceNetSyncCreate() {

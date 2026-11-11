@@ -9,6 +9,17 @@
 
 namespace AmdGpu {
 
+struct AlphaToMask {
+    u32 enable : 1;
+    u32 : 7;
+    u32 offset0 : 2;
+    u32 offset1 : 2;
+    u32 offset2 : 2;
+    u32 offset3 : 2;
+    u32 offset_round : 1;
+    u32 : 15;
+};
+
 enum class ZOrder : u32 {
     LateZ = 0,
     EarlyZLateZ = 1,

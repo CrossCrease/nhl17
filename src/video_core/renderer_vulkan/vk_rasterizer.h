@@ -173,7 +173,7 @@ private:
     Pipeline::DescriptorWrites set_writes;
     Shader::PushData push_data;
 
-    bool attachment_feedback_loop{};
+    vk::ImageAspectFlags attachment_feedback_loop{};
     bool needs_barrier{};
 };
 

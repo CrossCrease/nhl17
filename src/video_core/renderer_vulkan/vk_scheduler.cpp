@@ -3,6 +3,7 @@
 
 #include "common/assert.h"
 #include "common/debug.h"
+#include "common/performance_scope.h"
 #include "common/thread.h"
 #include "imgui/renderer/texture_manager.h"
 #include "video_core/renderer_vulkan/vk_instance.h"
@@ -123,6 +124,7 @@ void Scheduler::Finish() {
 }
 
 void Scheduler::Wait(u64 tick) {
+    PERFORMANCE_SCOPE("SchedulerWait");
     if (tick >= work_semaphore.CurrentTick()) {
         // Make sure we are not waiting for the current tick without signalling
         SubmitInfo info{};
@@ -183,6 +185,7 @@ void Scheduler::EndSession() {
 }
 
 void Scheduler::SubmitExecution(SubmitInfo& info) {
+    PERFORMANCE_SCOPE("SubmitExecution");
     std::scoped_lock lk{submit_mutex};
     const u64 signal_value = work_semaphore.NextTick();
 
@@ -426,9 +429,7 @@ void DynamicState::Commit(const Instance& instance, const vk::CommandBuffer& cmd
     }
     if (dirty_state.feedback_loop_enabled && instance.IsAttachmentFeedbackLoopLayoutSupported()) {
         dirty_state.feedback_loop_enabled = false;
-        cmdbuf.setAttachmentFeedbackLoopEnableEXT(feedback_loop_enabled
-                                                      ? vk::ImageAspectFlagBits::eColor
-                                                      : vk::ImageAspectFlagBits::eNone);
+        cmdbuf.setAttachmentFeedbackLoopEnableEXT(feedback_loop_enabled);
     }
 }
 

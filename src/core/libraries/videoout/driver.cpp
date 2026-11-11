@@ -1,6 +1,8 @@
 // SPDX-FileCopyrightText: Copyright 2025-2026 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <cstdlib>
+#include <limits>
 #include "common/assert.h"
 #include "common/debug.h"
 #include "common/thread.h"
@@ -66,6 +68,7 @@ void VideoOutDriver::Close(s32 handle) {
     main_port.is_open = false;
     main_port.flip_rate = 0;
     main_port.prev_index = -1;
+    main_port.pending_flips.fill(0);
 
     // Clear port information
     std::memset(main_port.buffer_labels.data(), 0, sizeof(main_port.buffer_labels));
@@ -167,6 +170,7 @@ int VideoOutDriver::RegisterBuffers(VideoOutPort* port, s32 startIndex, void* co
 
         // Reset flip label also when registering buffer
         port->buffer_labels[startIndex + i] = 0;
+        port->pending_flips[startIndex + i] = 0;
         port->SignalVoLabel();
 
         presenter->RegisterVideoOutSurface(group, address);
@@ -242,6 +246,8 @@ void VideoOutDriver::Flip(const Request& req) {
 
     // Update flip status.
     auto* port = req.port;
+    port->CompleteFlip(req.index);
+
     {
         std::unique_lock lock{port->port_mutex};
         auto& flip_status = port->flip_status;
@@ -250,9 +256,6 @@ void VideoOutDriver::Flip(const Request& req) {
         flip_status.tsc = Libraries::Kernel::sceKernelReadTsc();
         flip_status.flip_arg = req.flip_arg;
         flip_status.current_buffer = req.index;
-        if (req.eop) {
-            --flip_status.gc_queue_num;
-        }
         --flip_status.flip_pending_num;
     }
 
@@ -267,14 +270,6 @@ void VideoOutDriver::Flip(const Request& req) {
                                         (req.flip_arg << 16)));
         }
     }
-
-    // Reset prev flip label
-    if (port->prev_index != -1) {
-        port->buffer_labels[port->prev_index] = 0;
-        port->SignalVoLabel();
-    }
-    // save to prev buf index
-    port->prev_index = req.index;
 }
 
 void VideoOutDriver::DrawBlankFrame() {
@@ -293,16 +288,20 @@ bool VideoOutDriver::SubmitFlip(VideoOutPort* port, s32 index, s64 flip_arg,
                                 bool is_eop /*= false*/) {
     {
         std::unique_lock lock{port->port_mutex};
-        if (index != -1 && port->flip_status.flip_pending_num > 16) {
+        if (!is_eop && index != -1 && port->flip_status.flip_pending_num > 16) {
             LOG_ERROR(Lib_VideoOut, "Flip queue is full");
             return false;
         }
 
         if (is_eop) {
-            ++port->flip_status.gc_queue_num;
+            --port->flip_status.gc_queue_num;
+        } else {
+            if (index != -1) {
+                port->QueueFlip(index, false);
+            }
+            ++port->flip_status.flip_pending_num;
+            port->flip_status.submit_tsc = Libraries::Kernel::sceKernelReadTsc();
         }
-        ++port->flip_status.flip_pending_num; // integral GPU and CPU pending flips counter
-        port->flip_status.submit_tsc = Libraries::Kernel::sceKernelReadTsc();
     }
 
     if (!is_eop) {
@@ -344,6 +343,17 @@ void VideoOutDriver::PresentThread(std::stop_token token) {
     Common::SetCurrentThreadRealtime(vblank_period);
 
     Common::AccurateTimer timer{vblank_period};
+    const char* frame_stats_env = std::getenv("SHADPS4_LOG_FRAME_STATS");
+    const bool log_frame_stats = frame_stats_env && std::string_view{frame_stats_env} == "1";
+    auto last_flip = std::chrono::steady_clock::time_point{};
+    double sample_ms = 0.0;
+    double shortest_ms = std::numeric_limits<double>::max();
+    double longest_ms = 0.0;
+    u32 sample_frames = 0;
+    u32 sample_empty_slots = 0;
+    u32 sample_late_frames = 0;
+    double worst_wakeup_ms = 0.0;
+    double worst_present_ms = 0.0;
 
     const auto receive_request = [this] -> Request {
         std::scoped_lock lk{mutex};
@@ -357,6 +367,11 @@ void VideoOutDriver::PresentThread(std::stop_token token) {
 
     while (!token.stop_requested()) {
         timer.Start();
+        if (log_frame_stats) {
+            worst_wakeup_ms =
+                std::max(worst_wakeup_ms,
+                         -std::chrono::duration<double, std::milli>(timer.GetTotalWait()).count());
+        }
 
         if (DebugState.IsGuestThreadsPaused()) {
             DrawLastFrame();
@@ -369,6 +384,9 @@ void VideoOutDriver::PresentThread(std::stop_token token) {
         if (vblank_status.count % (main_port.flip_rate + 1) == 0) {
             const auto request = receive_request();
             if (!request) {
+                if (log_frame_stats && last_flip != std::chrono::steady_clock::time_point{}) {
+                    ++sample_empty_slots;
+                }
                 if (timer.GetTotalWait().count() < 0) { // Dont draw too fast
                     if (!main_port.is_open) {
                         DrawBlankFrame();
@@ -377,8 +395,52 @@ void VideoOutDriver::PresentThread(std::stop_token token) {
                     }
                 }
             } else {
+                const auto present_start = log_frame_stats
+                                               ? std::chrono::steady_clock::now()
+                                               : std::chrono::steady_clock::time_point{};
                 Flip(request);
                 FRAME_END;
+                if (log_frame_stats) {
+                    const auto now = std::chrono::steady_clock::now();
+                    worst_present_ms = std::max(
+                        worst_present_ms,
+                        std::chrono::duration<double, std::milli>(now - present_start).count());
+                    if (last_flip != std::chrono::steady_clock::time_point{}) {
+                        const double frame_ms =
+                            std::chrono::duration<double, std::milli>(now - last_flip).count();
+                        sample_ms += frame_ms;
+                        shortest_ms = std::min(shortest_ms, frame_ms);
+                        longest_ms = std::max(longest_ms, frame_ms);
+                        ++sample_frames;
+                        const double target_ms = std::chrono::duration<double, std::milli>(
+                                                     vblank_period * (main_port.flip_rate + 1))
+                                                     .count();
+                        sample_late_frames += frame_ms > target_ms * 1.5;
+                        if (sample_ms >= 1000.0) {
+                            LOG_INFO(
+                                Lib_VideoOut,
+                                "Frame stats: frames={} elapsed_ms={:.3f} fps={:.2f} "
+                                "min_ms={:.3f} max_ms={:.3f} at_ms={:.3f} flip_rate={} "
+                                "late_frames={} empty_slots={} wakeup_max_ms={:.3f} "
+                                "present_max_ms={:.3f}",
+                                sample_frames, sample_ms, sample_frames * 1000.0 / sample_ms,
+                                shortest_ms, longest_ms,
+                                std::chrono::duration<double, std::milli>(now.time_since_epoch())
+                                    .count(),
+                                main_port.flip_rate, sample_late_frames, sample_empty_slots,
+                                worst_wakeup_ms, worst_present_ms);
+                            sample_ms = 0.0;
+                            shortest_ms = std::numeric_limits<double>::max();
+                            longest_ms = 0.0;
+                            sample_frames = 0;
+                            sample_late_frames = 0;
+                            sample_empty_slots = 0;
+                            worst_wakeup_ms = 0.0;
+                            worst_present_ms = 0.0;
+                        }
+                    }
+                    last_flip = now;
+                }
             }
         }
 

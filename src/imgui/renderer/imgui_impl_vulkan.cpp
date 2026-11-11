@@ -8,6 +8,7 @@
 
 #include <imgui.h>
 
+#include "common/performance_scope.h"
 #include "imgui_impl_vulkan.h"
 
 #ifndef IM_MAX
@@ -22,6 +23,7 @@ struct RenderBuffer {
     vk::DeviceMemory buffer_memory{};
     vk::DeviceSize buffer_size{};
     vk::Buffer buffer{};
+    void* mapped{};
 };
 
 // Reusable buffers used for rendering 1 current in-flight frame, for RenderDrawData()
@@ -406,12 +408,13 @@ UploadTextureData UploadTexture(const void* data, vk::Format format, u32 width, 
 
     // Upload to Buffer
     {
-        char* map = (char*)CheckVkResult(v.device.mapMemory(info.upload_buffer_memory, 0, size));
+        char* map =
+            (char*)CheckVkResult(v.device.mapMemory(info.upload_buffer_memory, 0, VK_WHOLE_SIZE));
         memcpy(map, data, size);
         vk::MappedMemoryRange range[1]{
             {
                 .memory = info.upload_buffer_memory,
-                .size = size,
+                .size = VK_WHOLE_SIZE,
             },
         };
         CheckVkErr(v.device.flushMappedMemoryRanges(range));
@@ -486,6 +489,7 @@ void RemoveTexture(ImTextureID texture) {
 }
 
 static void CreateOrResizeBuffer(RenderBuffer& rb, size_t new_size, vk::BufferUsageFlagBits usage) {
+    PERFORMANCE_SCOPE("ResizeUiBuffer");
     VkData* bd = GetBackendData();
     IM_ASSERT(bd != nullptr);
     const InitInfo& v = bd->init_info;
@@ -493,6 +497,8 @@ static void CreateOrResizeBuffer(RenderBuffer& rb, size_t new_size, vk::BufferUs
         v.device.destroyBuffer(rb.buffer, v.allocator);
     }
     if (rb.buffer_memory != VK_NULL_HANDLE) {
+        v.device.unmapMemory(rb.buffer_memory);
+        rb.mapped = nullptr;
         v.device.freeMemory(rb.buffer_memory, v.allocator);
     }
 
@@ -515,6 +521,7 @@ static void CreateOrResizeBuffer(RenderBuffer& rb, size_t new_size, vk::BufferUs
     rb.buffer_memory = CheckVkResult(v.device.allocateMemory(alloc_info, v.allocator));
 
     CheckVkErr(v.device.bindBufferMemory(rb.buffer, rb.buffer_memory, 0));
+    rb.mapped = CheckVkResult(v.device.mapMemory(rb.buffer_memory, 0, VK_WHOLE_SIZE));
     rb.buffer_size = buffer_size_aligned;
 }
 
@@ -601,12 +608,8 @@ void RenderDrawData(ImDrawData& draw_data, vk::CommandBuffer command_buffer,
         }
 
         // Upload vertex/index data into a single contiguous GPU buffer
-        ImDrawVert* vtx_dst = nullptr;
-        ImDrawIdx* idx_dst = nullptr;
-        vtx_dst = (ImDrawVert*)CheckVkResult(
-            v.device.mapMemory(frb.vertex.buffer_memory, 0, vertex_size, vk::MemoryMapFlags{}));
-        idx_dst = (ImDrawIdx*)CheckVkResult(
-            v.device.mapMemory(frb.index.buffer_memory, 0, index_size, vk::MemoryMapFlags{}));
+        auto* vtx_dst = static_cast<ImDrawVert*>(frb.vertex.mapped);
+        auto* idx_dst = static_cast<ImDrawIdx*>(frb.index.mapped);
         for (int n = 0; n < draw_data.CmdListsCount; n++) {
             const ImDrawList* cmd_list = draw_data.CmdLists[n];
             memcpy(vtx_dst, cmd_list->VtxBuffer.Data,
@@ -626,8 +629,6 @@ void RenderDrawData(ImDrawData& draw_data, vk::CommandBuffer command_buffer,
             },
         };
         CheckVkErr(v.device.flushMappedMemoryRanges({range}));
-        v.device.unmapMemory(frb.vertex.buffer_memory);
-        v.device.unmapMemory(frb.index.buffer_memory);
     }
 
     // Setup desired Vulkan state
@@ -737,6 +738,7 @@ static void DestroyTexture(ImTextureData* tex) {
 }
 
 static void UpdateTexture(ImTextureData* tex, vk::CommandBuffer cmdbuf) {
+    PERFORMANCE_SCOPE("UpdateUiTexture");
     VkData* bd = GetBackendData();
     const InitInfo& v = bd->init_info;
 
@@ -816,7 +818,7 @@ static void UpdateTexture(ImTextureData* tex, vk::CommandBuffer cmdbuf) {
         staging.memory = CheckVkResult(v.device.allocateMemory(alloc_info, v.allocator));
         CheckVkErr(v.device.bindBufferMemory(staging.buffer, staging.memory, 0));
 
-        char* map = (char*)CheckVkResult(v.device.mapMemory(staging.memory, 0, upload_size));
+        char* map = (char*)CheckVkResult(v.device.mapMemory(staging.memory, 0, VK_WHOLE_SIZE));
         for (int y = 0; y < upload_h; y++) {
             memcpy(map + upload_pitch * y, tex->GetPixelsAt(upload_x, upload_y + y), upload_pitch);
         }
@@ -914,6 +916,8 @@ static void DestroyFrameRenderBuffers(vk::Device device, RenderBuffer& rb,
         rb.buffer = VK_NULL_HANDLE;
     }
     if (rb.buffer_memory) {
+        device.unmapMemory(rb.buffer_memory);
+        rb.mapped = nullptr;
         device.freeMemory(rb.buffer_memory, allocator);
         rb.buffer_memory = VK_NULL_HANDLE;
     }

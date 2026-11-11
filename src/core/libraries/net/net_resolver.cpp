@@ -3,7 +3,10 @@
 
 #include <algorithm>
 #include <array>
+#include <cctype>
+#include <cstdlib>
 #include <cstring>
+#include <fstream>
 #include <memory>
 #include <mutex>
 #include <thread>
@@ -12,6 +15,7 @@
 #include <vector>
 
 #include <fmt/format.h>
+#include <nlohmann/json.hpp>
 
 #include "common/logging/log.h"
 #include "core/libraries/net/net_error.h"
@@ -48,6 +52,55 @@ std::mutex g_mutex;
 std::unordered_map<s32, std::shared_ptr<Resolver>> g_resolvers;
 std::function<bool()> g_is_online;
 
+std::string NormalizeHostname(std::string hostname) {
+    if (!hostname.empty() && hostname.back() == '.') {
+        hostname.pop_back();
+    }
+    std::ranges::transform(hostname, hostname.begin(),
+                           [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    return hostname;
+}
+
+std::unordered_map<std::string, std::string> LoadHostOverrides() {
+    const char* path = std::getenv("SHADPS4_NET_HOST_OVERRIDES_JSON");
+    if (path == nullptr || path[0] == '\0') {
+        return {};
+    }
+    std::ifstream input(path);
+    if (!input) {
+        LOG_ERROR(Lib_Net, "network host overrides could not be opened: {}", path);
+        return {};
+    }
+    nlohmann::json root;
+    try {
+        input >> root;
+    } catch (const std::exception& error) {
+        LOG_ERROR(Lib_Net, "network host overrides could not be parsed: {}", error.what());
+        return {};
+    }
+    if (!root.is_object()) {
+        LOG_ERROR(Lib_Net, "network host overrides root must be an object");
+        return {};
+    }
+    std::unordered_map<std::string, std::string> overrides;
+    for (auto entry = root.begin(); entry != root.end(); ++entry) {
+        if (entry.key().empty() || entry.key().front() == '_' || !entry.value().is_string()) {
+            continue;
+        }
+        const std::string target = entry.value().get<std::string>();
+        if (!target.empty()) {
+            overrides.emplace(NormalizeHostname(entry.key()), target);
+        }
+    }
+    LOG_INFO(Lib_Net, "loaded {} network host overrides from {}", overrides.size(), path);
+    return overrides;
+}
+
+const std::unordered_map<std::string, std::string>& GetHostOverrides() {
+    static const auto overrides = LoadHostOverrides();
+    return overrides;
+}
+
 std::shared_ptr<Resolver> Find(s32 id) {
     std::scoped_lock lock{g_mutex};
     const auto it = g_resolvers.find(id);
@@ -65,8 +118,10 @@ bool IsOnline() {
 
 // IPv4 only, at most 10 records.
 s32 Lookup(std::string hostname, bool allow_literal, std::vector<u32>* addrs) {
-    if (!hostname.empty() && hostname.back() == '.') {
-        hostname.pop_back();
+    hostname = NormalizeHostname(std::move(hostname));
+    if (const auto entry = GetHostOverrides().find(hostname); entry != GetHostOverrides().end()) {
+        LOG_INFO(Lib_Net, "network host override: {} -> {}", hostname, entry->second);
+        hostname = entry->second;
     }
     if (hostname.compare(0, 9, "localhost") == 0) {
         addrs->push_back(htonl(INADDR_LOOPBACK));

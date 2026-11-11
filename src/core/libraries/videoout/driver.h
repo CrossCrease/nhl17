@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include "common/assert.h"
 #include "common/debug.h"
 #include "common/polyfill_thread.h"
 #include "core/libraries/videoout/video_out.h"
@@ -33,6 +34,7 @@ struct VideoOutPort {
     std::condition_variable vblank_cv;
     int flip_rate = 0;
     int prev_index = -1;
+    std::array<u32, MaxDisplayBuffers> pending_flips{};
     bool is_open = false;
     bool is_hdr = false;
 
@@ -48,6 +50,27 @@ struct VideoOutPort {
         const u64* start = &buffer_labels[0];
         const u64* end = &buffer_labels[MaxDisplayBuffers - 1];
         return address >= start && address <= end;
+    }
+
+    void QueueFlip(u32 index, bool lock_label) {
+        std::scoped_lock lk{vo_mutex};
+        ++pending_flips[index];
+        if (lock_label) {
+            buffer_labels[index] = 1;
+        }
+    }
+
+    void CompleteFlip(s32 index) {
+        std::scoped_lock lk{vo_mutex};
+        if (index != -1) {
+            ASSERT(pending_flips[index] != 0);
+            --pending_flips[index];
+        }
+        if (prev_index != -1 && prev_index != index && pending_flips[prev_index] == 0) {
+            buffer_labels[prev_index] = 0;
+            vo_cv.notify_one();
+        }
+        prev_index = index;
     }
 
     void WaitVoLabel(auto&& pred) {

@@ -2,6 +2,8 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include <algorithm>
+#include <chrono>
+#include <cstdlib>
 #include <limits>
 #include <xxhash.h>
 
@@ -95,10 +97,50 @@ TextureCache::~TextureCache() = default;
 
 void TextureCache::ProcessDownloadImages() {
     std::unique_lock lk{download_images_mutex};
+    if (download_images.empty()) {
+        return;
+    }
+    static const bool profile_readbacks = [] {
+        const char* value = std::getenv("SHADPS4_PROFILE_SCOPES");
+        return value && std::string_view{value} == "1";
+    }();
+    const auto started = profile_readbacks ? std::chrono::steady_clock::now()
+                                           : std::chrono::steady_clock::time_point{};
+    const auto image_count = download_images.size();
     for (const ImageId image_id : download_images) {
-        DownloadImageMemory(image_id, DownloadMemoryFlags::Sync);
+        DownloadImageMemory(image_id);
     }
     download_images.clear();
+    lk.unlock();
+    scheduler.Finish();
+    scheduler.PopPendingOperations();
+    if (profile_readbacks) {
+        static thread_local auto sample_started = started;
+        static thread_local u64 batches = 0;
+        static thread_local u64 images = 0;
+        static thread_local double total_ms = 0;
+        static thread_local double maximum_ms = 0;
+        const auto finished = std::chrono::steady_clock::now();
+        const double duration_ms =
+            std::chrono::duration<double, std::milli>(finished - started).count();
+        ++batches;
+        images += image_count;
+        total_ms += duration_ms;
+        maximum_ms = std::max(maximum_ms, duration_ms);
+        const double elapsed_ms =
+            std::chrono::duration<double, std::milli>(finished - sample_started).count();
+        if (elapsed_ms >= 1000.0) {
+            LOG_INFO(Render,
+                     "Readback stats: batches={} images={} elapsed_ms={:.3f} "
+                     "total_ms={:.3f} max_ms={:.3f}",
+                     batches, images, elapsed_ms, total_ms, maximum_ms);
+            sample_started = finished;
+            batches = 0;
+            images = 0;
+            total_ms = 0;
+            maximum_ms = 0;
+        }
+    }
 }
 
 void TextureCache::DownloadImageMemory(ImageId image_id, DownloadMemoryFlags flags) {

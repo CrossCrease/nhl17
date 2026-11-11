@@ -78,12 +78,18 @@ public:
 
 private:
     void MakeCurrent(const VideoCore::Buffer* handle);
+    void ConvertDepthBuffer(const VideoCore::Buffer* src, u64 src_offset,
+                            const VideoCore::Buffer* dst, u64 dst_offset, u32 count,
+                            vk::Format host_format, bool pack_depth);
 
 private:
     const Instance& instance;
     Scheduler& scheduler;
     std::unique_ptr<VideoCore::BlitHelper> blit_helper;
     StagingBufferPool staging_pool;
+    vk::UniqueDescriptorSetLayout depth_convert_set_layout;
+    vk::UniquePipelineLayout depth_convert_layout;
+    vk::UniquePipeline depth_convert_pipeline;
     struct BufferBarriers {
         const VideoCore::Buffer* handle;
         using AccessList = IntervalList<Interval>;

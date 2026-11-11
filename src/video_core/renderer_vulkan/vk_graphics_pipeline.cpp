@@ -128,6 +128,7 @@ GraphicsPipeline::GraphicsPipeline(
                 key.num_samples, instance.GetColorSampleCounts() & instance.GetDepthSampleCounts()),
             .sampleShadingEnable =
                 fs_info.addr_flags.persp_sample_ena || fs_info.addr_flags.linear_sample_ena,
+            .alphaToCoverageEnable = key.alpha_to_coverage_enable,
         };
     }
 
@@ -164,6 +165,9 @@ GraphicsPipeline::GraphicsPipeline(
         dynamic_states.push_back(vk::DynamicState::eVertexInputBindingStride);
     }
 
+    if (instance.IsAttachmentFeedbackLoopLayoutSupported()) {
+        dynamic_states.push_back(vk::DynamicState::eAttachmentFeedbackLoopEnableEXT);
+    }
     const vk::PipelineDynamicStateCreateInfo dynamic_info = {
         .dynamicStateCount = static_cast<u32>(dynamic_states.size()),
         .pDynamicStates = dynamic_states.data(),

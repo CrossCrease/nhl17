@@ -5,6 +5,7 @@
 
 #include "common/assert.h"
 #include "common/debug.h"
+#include "common/performance_scope.h"
 #include "common/polyfill_thread.h"
 #include "common/scope_exit.h"
 #include "common/thread.h"
@@ -131,6 +132,7 @@ void Liverpool::Process(std::stop_token stoken) {
     while (!stoken.stop_requested()) {
         {
             std::unique_lock lk{submit_mutex};
+            PERFORMANCE_SCOPE("GpuProducerIdle");
             Common::CondvarWait(submit_cv, lk, stoken,
                                 [this] { return num_commands || num_submits || submit_done; });
         }
@@ -158,7 +160,10 @@ void Liverpool::Process(std::stop_token stoken) {
                 }
                 task = queue.submits.front();
             }
-            task.resume();
+            {
+                PERFORMANCE_SCOPE("GpuCommandSlice");
+                task.resume();
+            }
 
             if (task.done()) {
                 task.destroy();
@@ -175,6 +180,7 @@ void Liverpool::Process(std::stop_token stoken) {
         if (submit_done) {
             VideoCore::EndCapture();
             if (rasterizer) {
+                PERFORMANCE_SCOPE("GpuSubmitFlush");
                 rasterizer->OnSubmit();
                 rasterizer->Flush();
             }
@@ -797,7 +803,12 @@ Liverpool::Task Liverpool::ProcessGraphics(std::span<const u32> dcb) {
                     if (rasterizer) {
                         rasterizer->OnFence();
                     }
-                    std::memcpy(address, write_data->data, data_size);
+                    if (vo_port->IsVoLabel(address) && data_size == sizeof(u32) &&
+                        write_data->data[0] == 1) {
+                        vo_port->QueueFlip(address - vo_port->buffer_labels.data(), true);
+                    } else {
+                        std::memcpy(address, write_data->data, data_size);
+                    }
                 } else {
                     UNREACHABLE();
                 }
