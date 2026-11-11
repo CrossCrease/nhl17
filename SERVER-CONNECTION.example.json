@@ -1,0 +1,21 @@
+{
+    "schema_version":  1,
+    "mode":  "crosscrease",
+    "online_id":  "PlayerOne",
+    "crosscrease":  {
+                        "server_address":  "127.0.0.1",
+                        "redirector_hostname":  "winter15.gosredirector.ea.com",
+                        "redirector_tcp_port":  42230,
+                        "identity_tcp_port":  31313,
+                        "psn_webapi_http_port":  31315,
+                        "trust_patch_file":  "..\\blaze\\Blaze15.1.1.3.0-nhl.01\\Games\\NHL17\\PS4\\v1.08\\Player\\generated\\nhl17-crosscrease-ca.xml"
+                    },
+    "custom":  {
+                   "server_address":  "127.0.0.1",
+                   "redirector_hostname":  "winter15.gosredirector.ea.com",
+                   "redirector_tcp_port":  42230,
+                   "identity_tcp_port":  31313,
+                   "psn_webapi_http_port":  31315,
+                   "trust_patch_file":  "..\\blaze\\Blaze15.1.1.3.0-nhl.01\\Games\\NHL17\\PS4\\v1.08\\Player\\generated\\nhl17-crosscrease-ca.xml"
+               }
+}

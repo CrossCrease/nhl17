@@ -421,3 +421,31 @@ cmake-build-*
 
 # Nix Result symlink
 result
+
+/runtime/
+/artifacts/
+*.pkg
+
+# --- CrossCrease NHL 17 ---------------------------------------------------------------
+# Game data is user-owned and never committed: base game, update/patch overlays, PKG files.
+/game/
+/game-*/
+*.pkg
+# Local build trees, runtime, captures and release output.
+/build-*/
+/runtime/
+/artifacts/
+/*.exe
+tools/__pycache__/
+*.pyc
+# Per-machine and per-player configuration; SERVER-CONNECTION.example.json is the shared template.
+/SERVER-CONNECTION.json
+/tools/multiplayer-powershell-path.txt
+# Private working notes.
+/devlog.md
+/GRAPHICS-HANDOFF.txt
+/NHL17-NOTES.txt
+/i-didnt-check-my-work.md
+# Release inputs (the generic Visual Studio "[Rr]elease/" rule above would hide them).
+!/tools/release/
+/runtime-*/
