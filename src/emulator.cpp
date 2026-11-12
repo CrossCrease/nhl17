@@ -47,6 +47,7 @@
 #include "core/memory.h"
 #include "core/user_settings.h"
 #include "emulator.h"
+#include "input/pad_pipe.h"
 #include "video_core/cache_storage.h"
 #include "video_core/renderdoc.h"
 
@@ -572,6 +573,7 @@ void Emulator::Run(std::filesystem::path file, std::vector<std::string> args,
     // Initialize components
     memory = Core::Memory::Instance();
     controllers = Common::Singleton<Input::GameControllers>::Instance();
+    Common::Singleton<Input::PadPipe>::Instance()->Start(controllers);
     linker = Common::Singleton<Core::Linker>::Instance();
 
     // Load renderdoc module

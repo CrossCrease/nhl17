@@ -33,6 +33,7 @@ CrossCrease never includes or downloads game files, console firmware, keys or sa
 | `src/`, `externals/`, `CMakeLists.txt` | The emulator source (shadPS4 plus CrossCrease changes). |
 | `tools/run_nhl17.ps1` | Supported way to start the game (configuration, environment, separate player data folder). |
 | `tools/run_nhl17_online.ps1`, `tools/run_nhl17_server.ps1` | Start the game connected to a CrossCrease server. See [SERVER-CONNECTION.md](SERVER-CONNECTION.md). |
+| `tools/control_nhl17.ps1`, `tools/capture_nhl17_window.ps1` | Developer automation: press pad buttons and take window screenshots. With a game started by `tools/run_nhl17.ps1` (which sets `SHADPS4_PAD_PIPE=true`), buttons go through the emulator's local pad pipe `\\.\pipe\shadps4-pad-<pid>`, so the game window does not need focus; screenshots work while it is covered but not minimised. |
 | `tools/package_release.ps1`, `tools/release/` | Build the downloadable release packages. See [RELEASING.md](RELEASING.md). |
 | `tools/hardware/` | Hardware tests used to verify emulation changes. |
 | `tools/*.py`, other `tools/*.ps1` | Developer analysis and capture tools. |

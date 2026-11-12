@@ -67,6 +67,7 @@ $values = @{
     SDL_WINDOW_ACTIVATE_WHEN_SHOWN = '0'
     SDL_WINDOW_ACTIVATE_WHEN_RAISED = '0'
     SHADPS4_ENABLE_IPC = 'false'
+    SHADPS4_PAD_PIPE = 'true'
     SHADPS4_BUFFER_READBACK_KIB = [string]$BufferReadbackWindowKiB
     SHADPS4_LOG_FRAME_STATS = $(if ($FrameStats -or $ProfileScopes) { '1' } else { $null })
     SHADPS4_PROFILE_SCOPES = $(if ($ProfileScopes) { '1' } else { $null })
