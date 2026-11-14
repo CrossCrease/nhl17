@@ -2,7 +2,10 @@
 
 Changes to CrossCrease NHL 17 releases. Versions follow [semantic versioning](https://semver.org/); the version source of truth is `tools/release/VERSION`. See [RELEASING.md](RELEASING.md) for how releases are built.
 
-## Unreleased (0.3.0) — Online passwords
+## 0.3.0 — Online passwords, renaming
+
+- The default server is `crosscrease.com`. Players can leave the launcher's Server setting at `default`.
+- Requires CrossCrease launcher 0.7.0 or newer; older launchers ask for a launcher update first.
 
 - `tools/run_nhl17_online.ps1` signs in with the player's password. The CrossCrease launcher 0.7.0 passes its Password setting in the `CROSSCREASE_SETTING_PASSWORD` environment variable; developers can use `-Password`. Without either, the shared developer password `local-only` is sent, which CrossCrease servers on the Internet refuse.
 - The password is never written to disk: the script leaves `shadnet_password` in `users.json` empty and hands the password to the emulator in `SHADPS4_SHADNET_PASSWORD`, which the emulator uses for the primary user and then removes from its environment.

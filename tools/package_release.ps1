@@ -16,7 +16,7 @@ param(
     [string]$OutputDirectory = '',
     [string]$ServerAddress = '',
     [string]$Repository = 'CrossCrease/nhl17',
-    [string]$MinimumLauncher = '0.6.0'
+    [string]$MinimumLauncher = '0.7.0'
 )
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName System.IO.Compression, System.IO.Compression.FileSystem
