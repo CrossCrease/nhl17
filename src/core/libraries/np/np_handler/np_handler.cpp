@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cstdlib>
 #include <cstring>
 #include <fmt/format.h>
 #include "common/elf_info.h"
@@ -92,6 +93,26 @@ std::pair<std::string, u16> NpHandler::ParseServerAddress() const {
     return {host, port};
 }
 
+namespace {
+
+// The primary user's password can come from the environment instead of users.json, so it is never
+// stored on disk. It is read once and removed from this process's environment.
+const std::string& PrimaryPasswordFromEnvironment() {
+    static const std::string password = [] {
+        const char* value = std::getenv("SHADPS4_SHADNET_PASSWORD");
+        std::string result = value ? value : "";
+#ifdef _WIN32
+        _putenv_s("SHADPS4_SHADNET_PASSWORD", "");
+#else
+        unsetenv("SHADPS4_SHADNET_PASSWORD");
+#endif
+        return result;
+    }();
+    return password;
+}
+
+} // namespace
+
 bool NpHandler::ConnectUserById(s32 user_id) {
     if (!EmulatorSettings.IsShadNetEnabled())
         return false;
@@ -110,15 +131,17 @@ bool NpHandler::ConnectUserById(s32 user_id) {
                   u->user_name);
         return false;
     }
-    if (u->shadnet_npid.empty() || u->shadnet_password.empty()) {
+    const std::string& password = u->player_index == 1 && !PrimaryPasswordFromEnvironment().empty()
+                                      ? PrimaryPasswordFromEnvironment()
+                                      : u->shadnet_password;
+    if (u->shadnet_npid.empty() || password.empty()) {
         LOG_WARNING(NpHandler, "user_id={} ('{}') shadNet enabled but credentials missing,skipping",
                     u->user_id, u->user_name);
         return false;
     }
 
     const auto [host, port] = ParseServerAddress();
-    return ConnectUser(u->user_id, host, port, u->shadnet_npid, u->shadnet_password,
-                       u->shadnet_token);
+    return ConnectUser(u->user_id, host, port, u->shadnet_npid, password, u->shadnet_token);
 }
 
 void NpHandler::StartWorker() {

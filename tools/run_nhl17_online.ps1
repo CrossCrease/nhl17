@@ -9,13 +9,16 @@ param(
     [string]$ConnectionDirectory = '',
     [string]$ServerAddress = '',
     [ValidatePattern('^[a-zA-Z0-9_-]{3,16}$')][string]$OnlineId = 'NHL17Player',
-    # The account password on the CrossCrease server (the launcher's Password setting). Without it the
-    # shared developer password is sent, which only private test servers accept.
+    # The account password on the CrossCrease server. The launcher passes its Password setting in the
+    # CROSSCREASE_SETTING_PASSWORD environment variable instead, so it never appears on a command line.
+    # Without either, the shared developer password is sent, which only private test servers accept.
     [string]$Password = '',
     [string]$RuntimeDirectory = '',
     [switch]$BaseOnly
 )
 $ErrorActionPreference = 'Stop'
+if (-not $Password -and $env:CROSSCREASE_SETTING_PASSWORD) { $Password = $env:CROSSCREASE_SETTING_PASSWORD }
+Remove-Item Env:\CROSSCREASE_SETTING_PASSWORD -ErrorAction SilentlyContinue
 # Windows PowerShell 5.1 can leave $PSScriptRoot empty while parameter defaults are evaluated.
 $scriptDirectory = Split-Path -Parent $MyInvocation.MyCommand.Path
 if (-not $ConnectionDirectory) { $ConnectionDirectory = Join-Path $scriptDirectory '..\online' }
@@ -66,15 +69,20 @@ try {
     $user = $users.Users.user | Where-Object { $_.player_index -eq 1 } | Select-Object -First 1
     if (-not $user) { throw 'No primary emulator user exists.' }
     $user.shadnet_npid = $OnlineId
-    $user.shadnet_password = $(if ($Password) { $Password } else { 'local-only' })
+    # The emulator takes the password from SHADPS4_SHADNET_PASSWORD, so it is never written to users.json.
+    $user.shadnet_password = ''
     $user.shadnet_token = ''
     $user.shadnet_email = ''
     $user.shadnet_enabled = $true
     $users | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath $usersPath
+    $env:SHADPS4_SHADNET_PASSWORD = $(if ($Password) { $Password } else { 'local-only' })
     $process = & (Join-Path $scriptDirectory 'run_nhl17.ps1') -Game $Game -RuntimeDirectory $runtimePath -DataDirectory $dataPath `
         -Label 'online' -NetworkHostOverridesJson $hostOverrides -PatchFile $patchPath
+    Remove-Item Env:\SHADPS4_SHADNET_PASSWORD -ErrorAction SilentlyContinue
+    $Password = ''
     Wait-Process -Id $process.ProcessId
 } finally {
+    Remove-Item Env:\SHADPS4_SHADNET_PASSWORD -ErrorAction SilentlyContinue
     Copy-Item -LiteralPath $configBackup -Destination $configPath -Force
     Copy-Item -LiteralPath $usersBackup -Destination $usersPath -Force
 }
