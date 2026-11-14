@@ -9,6 +9,9 @@ param(
     [string]$ConnectionDirectory = '',
     [string]$ServerAddress = '',
     [ValidatePattern('^[a-zA-Z0-9_-]{3,16}$')][string]$OnlineId = 'NHL17Player',
+    # The account password on the CrossCrease server (the launcher's Password setting). Without it the
+    # shared developer password is sent, which only private test servers accept.
+    [string]$Password = '',
     [string]$RuntimeDirectory = '',
     [switch]$BaseOnly
 )
@@ -63,7 +66,7 @@ try {
     $user = $users.Users.user | Where-Object { $_.player_index -eq 1 } | Select-Object -First 1
     if (-not $user) { throw 'No primary emulator user exists.' }
     $user.shadnet_npid = $OnlineId
-    $user.shadnet_password = 'local-only'
+    $user.shadnet_password = $(if ($Password) { $Password } else { 'local-only' })
     $user.shadnet_token = ''
     $user.shadnet_email = ''
     $user.shadnet_enabled = $true

@@ -2,6 +2,11 @@
 
 Changes to CrossCrease NHL 17 releases. Versions follow [semantic versioning](https://semver.org/); the version source of truth is `tools/release/VERSION`. See [RELEASING.md](RELEASING.md) for how releases are built.
 
+## Unreleased (0.3.0) — Online passwords
+
+- `tools/run_nhl17_online.ps1` takes `-Password` and signs in with it (the CrossCrease launcher 0.7.0 passes the player's Password setting). Without it the shared developer password `local-only` is sent, which CrossCrease servers on the Internet refuse.
+- A rejected sign-in shows a notification: wrong password, online ID not accepted, or refused (too many wrong passwords or a suspended account). Before, the game only stayed offline.
+
 ## 0.2.0 — Online files included, background pad input, invite fix
 
 - The runtime package now includes the online connection files in `online\`. The separate `crosscrease-nhl17-online-<version>.zip` is no longer published.

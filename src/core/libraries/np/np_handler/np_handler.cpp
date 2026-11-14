@@ -317,6 +317,29 @@ bool NpHandler::ConnectUser(s32 user_id, const std::string& host, u16 port, cons
     if (auth_state != ShadNet::ShadNetState::Ok) {
         LOG_ERROR(NpHandler, "user_id={} authentication failed (state={})", user_id,
                   static_cast<int>(auth_state));
+        switch (auth_state) {
+        case ShadNet::ShadNetState::FailurePassword:
+            ImGui::ShadNetNotify::Push(
+                ImGui::ShadNetNotify::Kind::Info,
+                fmt::format("Sign-in failed: wrong password for online ID '{}'. Check the "
+                            "password in the launcher's Game settings.",
+                            npid));
+            break;
+        case ShadNet::ShadNetState::FailureUsername:
+            ImGui::ShadNetNotify::Push(
+                ImGui::ShadNetNotify::Kind::Info,
+                fmt::format("Sign-in failed: the server does not accept online ID '{}'.", npid));
+            break;
+        case ShadNet::ShadNetState::FailureAuth:
+            ImGui::ShadNetNotify::Push(
+                ImGui::ShadNetNotify::Kind::Info,
+                fmt::format("Sign-in failed: the server refused online ID '{}' (too many wrong "
+                            "passwords, or the account is suspended).",
+                            npid));
+            break;
+        default:
+            break;
+        }
         handle_protocol_mismatch(auth_state);
         client->Stop();
         return false;
