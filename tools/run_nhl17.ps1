@@ -43,6 +43,22 @@ if ($DataDirectory) {
         }
     }
     $artifacts = Join-Path $workingPath 'logs'
+    # The base game cannot load a profile saved by the update, and its "Create New Profile" replaces
+    # it. When an update exists, keep a copy of the saves before starting the base game (newest 5).
+    $gameFolder = if (Test-Path -LiteralPath $gamePath -PathType Leaf) { Split-Path -Parent $gamePath } else { $gamePath }
+    $saves = @(Get-ChildItem -Path (Join-Path $userPath 'home\*\savedata') -Directory -ErrorAction SilentlyContinue |
+        Where-Object { Get-ChildItem -LiteralPath $_.FullName -Recurse -File -ErrorAction SilentlyContinue | Select-Object -First 1 })
+    if ($BaseOnly -and $saves.Count -and ((Test-Path -LiteralPath "$gameFolder-UPDATE") -or (Test-Path -LiteralPath "$gameFolder-patch"))) {
+        $backupRoot = Join-Path $workingPath 'save-backups'
+        $backup = Join-Path $backupRoot ((Get-Date -Format 'yyyyMMdd-HHmmss') + '-before-base-game')
+        foreach ($save in $saves) {
+            $target = Join-Path $backup (Split-Path -Leaf $save.Parent.FullName)
+            New-Item -ItemType Directory -Path $target -Force | Out-Null
+            Copy-Item -LiteralPath $save.FullName -Destination $target -Recurse
+        }
+        Get-ChildItem -LiteralPath $backupRoot -Directory | Sort-Object Name -Descending | Select-Object -Skip 5 |
+            Remove-Item -Recurse -Force
+    }
 } else {
     $workingPath = $runtimePath
     $userPath = Join-Path $runtimePath 'user'

@@ -2,6 +2,13 @@
 
 Changes to CrossCrease NHL 17 releases. Versions follow [semantic versioning](https://semver.org/); the version source of truth is `tools/release/VERSION`. See [RELEASING.md](RELEASING.md) for how releases are built.
 
+## 0.4.0 — Base game online
+
+- The base game (1.00, **Start with the game update** turned off) now plays online. Before, `tools/run_nhl17_online.ps1 -BaseOnly` started it offline. Base-game players are matched only with other base-game players, and update players only with update players. Online play uses the roster built into each game version; nothing is downloaded. Needs a CrossCrease server 0.3.0 or newer (older servers sign the base game in, but Ranked Quick Match stops at "Unable to download rosters").
+- The base game cannot load a profile saved by the update, and its "Create New Profile" replaces it. When an update is installed, `tools/run_nhl17.ps1 -BaseOnly` with a data folder first copies the player's saves to `<data folder>\save-backups\<date>-before-base-game\` (newest 5 kept).
+- `tools/run_nhl17_online.ps1` has `-AllowMultipleInstances` for developer tests with a second player on one PC (each needs its own runtime folder).
+- Verified on one PC against a local server: two base-game players matched in Ranked Quick Match and reached live gameplay. Not verified: a base-game player against a CrossCrease server on the Internet.
+
 ## 0.3.0 — Online passwords, renaming
 
 - The default server is `crosscrease.com`. Players can leave the launcher's Server setting at `default`.

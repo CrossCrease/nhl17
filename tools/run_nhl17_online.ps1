@@ -1,8 +1,8 @@
 # Starts NHL 17 connected to a CrossCrease server. This is what the CrossCrease launcher's Play button runs.
 # The online connection files ship in the runtime package's online\ folder. Mirrors run_nhl17_server.ps1
 # (crosscrease mode) for installed packages: the player's config is changed only for this session and
-# restored when the game closes. With -BaseOnly (the game update turned off) the game starts offline,
-# because the online connection files target the 1.08 update.
+# restored when the game closes. With -BaseOnly (the game update turned off) the base game (1.00) starts
+# online too; the server trust patch covers both versions.
 param(
     [Parameter(Mandatory = $true)][string]$Game,
     [Parameter(Mandatory = $true)][string]$DataDirectory,
@@ -14,7 +14,9 @@ param(
     # Without either, the shared developer password is sent, which only private test servers accept.
     [string]$Password = '',
     [string]$RuntimeDirectory = '',
-    [switch]$BaseOnly
+    [switch]$BaseOnly,
+    # Developer testing: a second player on the same PC (needs its own runtime folder).
+    [switch]$AllowMultipleInstances
 )
 $ErrorActionPreference = 'Stop'
 if (-not $Password -and $env:CROSSCREASE_SETTING_PASSWORD) { $Password = $env:CROSSCREASE_SETTING_PASSWORD }
@@ -23,10 +25,6 @@ Remove-Item Env:\CROSSCREASE_SETTING_PASSWORD -ErrorAction SilentlyContinue
 $scriptDirectory = Split-Path -Parent $MyInvocation.MyCommand.Path
 if (-not $ConnectionDirectory) { $ConnectionDirectory = Join-Path $scriptDirectory '..\online' }
 if (-not $RuntimeDirectory) { $RuntimeDirectory = Join-Path $scriptDirectory '..\runtime' }
-if ($BaseOnly) {
-    & (Join-Path $scriptDirectory 'run_nhl17.ps1') -Game $Game -RuntimeDirectory $RuntimeDirectory -DataDirectory $DataDirectory -BaseOnly | Out-Null
-    return
-}
 $connectionPath = (Resolve-Path -LiteralPath $ConnectionDirectory).Path
 $connection = Get-Content -LiteralPath (Join-Path $connectionPath 'server_connection.json') -Raw | ConvertFrom-Json
 if (-not $ServerAddress -or $ServerAddress -eq 'default') { $ServerAddress = [string]$connection.server_address }
@@ -77,7 +75,8 @@ try {
     $users | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath $usersPath
     $env:SHADPS4_SHADNET_PASSWORD = $(if ($Password) { $Password } else { 'local-only' })
     $process = & (Join-Path $scriptDirectory 'run_nhl17.ps1') -Game $Game -RuntimeDirectory $runtimePath -DataDirectory $dataPath `
-        -Label 'online' -NetworkHostOverridesJson $hostOverrides -PatchFile $patchPath
+        -Label 'online' -NetworkHostOverridesJson $hostOverrides -PatchFile $patchPath -BaseOnly:$BaseOnly `
+        -AllowMultipleInstances:$AllowMultipleInstances
     Remove-Item Env:\SHADPS4_SHADNET_PASSWORD -ErrorAction SilentlyContinue
     $Password = ''
     Wait-Process -Id $process.ProcessId
