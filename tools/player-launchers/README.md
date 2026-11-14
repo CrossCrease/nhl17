@@ -6,11 +6,10 @@ Build the two clickable Windows launchers from the NHL 17 project root:
 .\tools\build_player_launchers.ps1
 ```
 
-Start the Blaze stack first:
+Start the NHL 17 server first (sibling `crosscrease-server17` project):
 
 ```powershell
-cd ..\blaze\Blaze15.1.1.3.0-nhl.01\Games\NHL17\PS4\v1.08\Server\Host
-.\start_stack.ps1
+..\crosscrease-server17\nhl17-server.cmd start
 ```
 
 Then double-click `artifacts\player-launchers\Player1.exe` and
@@ -18,6 +17,6 @@ Then double-click `artifacts\player-launchers\Player1.exe` and
 creates and uses `runtime-player2` and the local identity `NHL17Probe2`.
 
 Both launchers use `tools\run_nhl17_server.ps1`, pass isolated runtime paths,
-and allow the two shadPS4 processes to run at the same time. The server stack
-must be stopped separately with `stop_stack.ps1` after both game instances
-close.
+and allow the two shadPS4 processes to run at the same time. Stop the server
+separately with `..\crosscrease-server17\nhl17-server.cmd stop` after both game
+instances close.

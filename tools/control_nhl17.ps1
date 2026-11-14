@@ -38,7 +38,7 @@ $foreground = [Nhl17Window]::GetForegroundWindow()
 # pipe, which works while the game window is in the background. Keyboard input needs focus.
 $padButtons = @{ Cross = 'cross'; Circle = 'circle'; Square = 'square'; Triangle = 'triangle';
     Up = 'up'; Down = 'down'; Left = 'left'; Right = 'right'; Options = 'options';
-    L1 = 'l1'; R1 = 'r1'; L2 = 'l2'; R2 = 'r2'; L3 = 'l3'; R3 = 'r3'; Touchpad = 'touchpad';
+    L1 = 'l1'; R1 = 'r1'; L2 = 'l2'; R2 = 'r2'; L3 = 'l3'; R3 = 'r3'; Touchpad = 'touchpad'; Share = 'share';
     N = 'cross'; B = 'circle'; V = 'square'; C = 'triangle'; Q = 'l1'; U = 'r1'; E = 'l2'; O = 'r2' }
 $padKeys = @($Keys | Where-Object { $padButtons.ContainsKey($_) })
 $pipe = $null

@@ -156,7 +156,8 @@ void InvitationDialogUi::Draw() {
                         return v;
                     };
                     const std::string filter = to_lower(state->friend_filter);
-                    if (BeginChild("##invitation_friends", ImVec2(0.0f, 120.0f), true)) {
+                    if (BeginChild("##invitation_friends", ImVec2(0.0f, 120.0f),
+                                   ImGuiChildFlags_Borders | ImGuiChildFlags_NavFlattened)) {
                         auto& sel = state->selected_npids;
                         for (const auto& f : friend_list.friends) {
                             if (!filter.empty() &&
@@ -195,7 +196,8 @@ void InvitationDialogUi::Draw() {
                 TextWrapped("You have %d pending invitation(s):",
                             static_cast<int>(state->recv_invitations.size()));
                 Spacing();
-                if (BeginChild("##pending_invitations", ImVec2(0.0f, 120.0f), true)) {
+                if (BeginChild("##pending_invitations", ImVec2(0.0f, 120.0f),
+                               ImGuiChildFlags_Borders | ImGuiChildFlags_NavFlattened)) {
                     for (int i = 0; i < static_cast<int>(state->recv_invitations.size()); i++) {
                         PushID(i);
                         const auto& inv = state->recv_invitations[i];

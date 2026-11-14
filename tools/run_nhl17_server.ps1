@@ -97,7 +97,7 @@ try {
                 Join-Path $root $configuredPatch
             }
             if (-not (Test-Path -LiteralPath $patchPath)) {
-                throw "Server trust patch not found: $patchPath. Run the Blaze Redirector provision_server_trust.ps1 first."
+                throw "Server trust patch not found: $patchPath. Create it with '..\crosscrease-server17\nhl17-server.cmd trust create' and copy it with 'trust export-player'."
             }
             $launcherArgs.PatchFile = (Resolve-Path -LiteralPath $patchPath).Path
         }

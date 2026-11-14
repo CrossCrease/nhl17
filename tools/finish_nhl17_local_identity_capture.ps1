@@ -4,8 +4,7 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 $root = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
-$blazeRoot = (Resolve-Path (Join-Path $root '..\blaze')).Path
-$relayRoot = Join-Path $blazeRoot 'Blaze15.1.1.3.0-nhl.01\Games\NHL17\PS4\v1.08\Server\TransportRelay'
+$relayRoot = (Resolve-Path (Join-Path $root '..\crosscrease-server17\components\TransportRelay')).Path
 $stateRoot = Join-Path $root (Join-Path 'artifacts\local-identity-sessions' $Label)
 $statePath = Join-Path $stateRoot 'state.json'
 if (-not (Test-Path -LiteralPath $statePath)) { throw "Unknown local identity label: $Label" }

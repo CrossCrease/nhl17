@@ -1,15 +1,26 @@
-# Starts NHL 17 connected to a CrossCrease server using an installed online connection package.
-# Used by the CrossCrease launcher; mirrors run_nhl17_server.ps1 (crosscrease mode) for installed packages:
-# the player's config is changed only for this session and restored when the game closes.
+# Starts NHL 17 connected to a CrossCrease server. This is what the CrossCrease launcher's Play button runs.
+# The online connection files ship in the runtime package's online\ folder. Mirrors run_nhl17_server.ps1
+# (crosscrease mode) for installed packages: the player's config is changed only for this session and
+# restored when the game closes. With -BaseOnly (the game update turned off) the game starts offline,
+# because the online connection files target the 1.08 update.
 param(
     [Parameter(Mandatory = $true)][string]$Game,
-    [Parameter(Mandatory = $true)][string]$ConnectionDirectory,
     [Parameter(Mandatory = $true)][string]$DataDirectory,
+    [string]$ConnectionDirectory = '',
     [string]$ServerAddress = '',
     [ValidatePattern('^[a-zA-Z0-9_-]{3,16}$')][string]$OnlineId = 'NHL17Player',
-    [string]$RuntimeDirectory = (Join-Path $PSScriptRoot '..\runtime')
+    [string]$RuntimeDirectory = '',
+    [switch]$BaseOnly
 )
 $ErrorActionPreference = 'Stop'
+# Windows PowerShell 5.1 can leave $PSScriptRoot empty while parameter defaults are evaluated.
+$scriptDirectory = Split-Path -Parent $MyInvocation.MyCommand.Path
+if (-not $ConnectionDirectory) { $ConnectionDirectory = Join-Path $scriptDirectory '..\online' }
+if (-not $RuntimeDirectory) { $RuntimeDirectory = Join-Path $scriptDirectory '..\runtime' }
+if ($BaseOnly) {
+    & (Join-Path $scriptDirectory 'run_nhl17.ps1') -Game $Game -RuntimeDirectory $RuntimeDirectory -DataDirectory $DataDirectory -BaseOnly | Out-Null
+    return
+}
 $connectionPath = (Resolve-Path -LiteralPath $ConnectionDirectory).Path
 $connection = Get-Content -LiteralPath (Join-Path $connectionPath 'server_connection.json') -Raw | ConvertFrom-Json
 if (-not $ServerAddress -or $ServerAddress -eq 'default') { $ServerAddress = [string]$connection.server_address }
@@ -57,7 +68,7 @@ try {
     $user.shadnet_email = ''
     $user.shadnet_enabled = $true
     $users | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath $usersPath
-    $process = & (Join-Path $PSScriptRoot 'run_nhl17.ps1') -Game $Game -RuntimeDirectory $runtimePath -DataDirectory $dataPath `
+    $process = & (Join-Path $scriptDirectory 'run_nhl17.ps1') -Game $Game -RuntimeDirectory $runtimePath -DataDirectory $dataPath `
         -Label 'online' -NetworkHostOverridesJson $hostOverrides -PatchFile $patchPath
     Wait-Process -Id $process.ProcessId
 } finally {

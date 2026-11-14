@@ -17,7 +17,7 @@ Most players never build this project. They use the [CrossCrease launcher](https
 1. Install the launcher and select **NHL 17**.
 2. Press **Download**. The launcher installs the latest runtime from this repository's [releases](https://github.com/CrossCrease/nhl17/releases) and checks its checksum.
 3. Open **Game settings** and select your game's `eboot.bin` (or its folder).
-4. Press **Play**. **Play online** additionally downloads the online connection files and asks for your online ID.
+4. Press **Play**. The first time, the launcher asks for your online ID (the server can stay `default`). The game then connects to the CrossCrease server. With **Start with the game update** turned off, the base game starts offline.
 
 ### What you need
 
@@ -31,8 +31,10 @@ CrossCrease never includes or downloads game files, console firmware, keys or sa
 | Path | Contents |
 | --- | --- |
 | `src/`, `externals/`, `CMakeLists.txt` | The emulator source (shadPS4 plus CrossCrease changes). |
-| `tools/run_nhl17.ps1` | Supported way to start the game (configuration, environment, separate player data folder). |
-| `tools/run_nhl17_online.ps1`, `tools/run_nhl17_server.ps1` | Start the game connected to a CrossCrease server. See [SERVER-CONNECTION.md](SERVER-CONNECTION.md). |
+| `tools/run_nhl17.ps1` | Supported way to start the game (configuration, environment, separate player data folder). Applies `patches/nhl17-compat.xml` together with any `-PatchFile`. |
+| `patches/nhl17-compat.xml` | CrossCrease compatibility patch for update 1.08, applied in memory (addresses are ELF virtual address + 0x400000, the shadPS4 convention). Currently fixes the main-menu invitation accept that stayed on "Connecting"; the file's comment explains the change. |
+| `tools/run_nhl17_online.ps1` | What the launcher's **Play** runs: starts the game connected to a CrossCrease server using the runtime package's `online\` files (offline with `-BaseOnly`). |
+| `tools/run_nhl17_server.ps1` | Developer toggle between offline, CrossCrease and custom servers. See [SERVER-CONNECTION.md](SERVER-CONNECTION.md). |
 | `tools/control_nhl17.ps1`, `tools/capture_nhl17_window.ps1` | Developer automation: press pad buttons and take window screenshots. With a game started by `tools/run_nhl17.ps1` (which sets `SHADPS4_PAD_PIPE=true`), buttons go through the emulator's local pad pipe `\\.\pipe\shadps4-pad-<pid>`, so the game window does not need focus; screenshots work while it is covered but not minimised. |
 | `tools/package_release.ps1`, `tools/release/` | Build the downloadable release packages. See [RELEASING.md](RELEASING.md). |
 | `tools/hardware/` | Hardware tests used to verify emulation changes. |
@@ -55,7 +57,7 @@ Copy the resulting `shadPS4.exe` and the Visual C++ runtime DLLs into `runtime\`
 
 ## Releases and versioning
 
-Releases follow semantic versioning. The version lives in `tools/release/VERSION`, and each GitHub release `v<version>` carries the runtime package, the online package, the launcher feed and checksums. The tag contains the exact source of the released `shadPS4.exe`. See [RELEASING.md](RELEASING.md).
+Releases follow semantic versioning. The version lives in `tools/release/VERSION`, and each GitHub release `v<version>` carries the runtime package (which includes the online connection files), the launcher feed and checksums. The tag contains the exact source of the released `shadPS4.exe`. See [RELEASING.md](RELEASING.md).
 
 ## License and attribution
 

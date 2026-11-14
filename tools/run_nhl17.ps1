@@ -58,11 +58,29 @@ $config.Log.filter = if ($LogFilter) { $LogFilter } elseif ($ProfileScopes) { '*
 $config | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath $configPath
 $arguments = '--show-fps -g "' + $gamePath + '"'
 if ($BaseOnly) { $arguments += ' --ignore-game-patch' }
+# shadPS4 takes one patch file. The CrossCrease compatibility patch (update 1.08 only) is combined
+# with the requested patch file, for example the server trust patch.
+$patchFiles = @()
+$compatibilityPatch = Join-Path $PSScriptRoot '..\patches\nhl17-compat.xml'
+if (-not $BaseOnly -and (Test-Path -LiteralPath $compatibilityPatch)) { $patchFiles += (Resolve-Path -LiteralPath $compatibilityPatch).Path }
+if ($PatchFile) { $patchFiles += (Resolve-Path -LiteralPath $PatchFile).Path }
 $resolvedPatchFile = ''
-if ($PatchFile) {
-    $resolvedPatchFile = (Resolve-Path -LiteralPath $PatchFile).Path
-    $arguments += ' -p "' + $resolvedPatchFile + '"'
+if ($patchFiles.Count -eq 1) {
+    $resolvedPatchFile = $patchFiles[0]
+} elseif ($patchFiles.Count -gt 1) {
+    $combined = New-Object System.Xml.XmlDocument
+    $combined.Load($patchFiles[0])
+    foreach ($file in $patchFiles[1..($patchFiles.Count - 1)]) {
+        $document = New-Object System.Xml.XmlDocument
+        $document.Load($file)
+        foreach ($metadata in $document.SelectNodes('/Patch/Metadata')) {
+            [void]$combined.DocumentElement.AppendChild($combined.ImportNode($metadata, $true))
+        }
+    }
+    $resolvedPatchFile = [IO.Path]::GetFullPath((Join-Path $artifacts "$Label.patch.xml"))
+    $combined.Save($resolvedPatchFile)
 }
+if ($resolvedPatchFile) { $arguments += ' -p "' + $resolvedPatchFile + '"' }
 $values = @{
     SDL_WINDOW_ACTIVATE_WHEN_SHOWN = '0'
     SDL_WINDOW_ACTIVATE_WHEN_RAISED = '0'

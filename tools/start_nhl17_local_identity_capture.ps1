@@ -12,8 +12,7 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 $root = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
-$blazeRoot = (Resolve-Path (Join-Path $root '..\blaze')).Path
-$serverRoot = Join-Path $blazeRoot 'Blaze15.1.1.3.0-nhl.01\Games\NHL17\PS4\v1.08\Server'
+$serverRoot = (Resolve-Path (Join-Path $root '..\crosscrease-server17\components')).Path
 $identityRoot = Join-Path $serverRoot 'Identity'
 $psnWebApiRoot = Join-Path $serverRoot 'PSNWebAPI'
 $redirectorRoot = Join-Path $serverRoot 'Redirector'

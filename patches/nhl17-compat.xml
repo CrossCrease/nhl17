@@ -1,0 +1,27 @@
+<?xml version="1.0"?>
+<!--
+  CrossCrease compatibility patch for NHL 17 update 1.08 (eboot.bin, verified against CUSA04326).
+  Addresses use the shadPS4 convention (ELF virtual address + 0x400000).
+
+  Invite login fix: accepting a game invitation from the main menu could stay on "Connecting".
+  The invite flow clears all pending UI service-request callbacks, but when the invite is accepted
+  from the main menu the game's UI already sends its login check before that clear runs, so the
+  login reply is dropped. The patch records the request counter when a game mode is cleaned up
+  (CleanupServiceRequestForMode) and keeps the callbacks of requests made after it, as long as at
+  most 8 requests have been made since. Every other pending callback is still cleared.
+  Code lives in an unused automation-harness function (vaddr 0x1217060); 12 bytes of state live in
+  the zeroed space after .bss (vaddr 0x496bf08).
+-->
+<Patch>
+  <TitleID>
+    <ID>CUSA04326</ID>
+    <ID>CUSA04330</ID>
+  </TitleID>
+  <Metadata Title="NHL 17" Name="CrossCrease invite login fix" Author="CrossCrease" PatchVer="1.0" AppVer="01.08" AppElf="eboot.bin" isEnabled="true">
+    <PatchList>
+      <Line Type="bytes" Address="0x01617060" Value="8b87a000000089059c4e750348893d9d4e7503554889e541574156534883ec18e9b8480500cccccc4d8b6e08488b45b8483b05794e750375228b88a00000002b0d634e750383f9087711418b453c2b05544e75037e05e9fd470500498b7d18e9d4470500"/>
+      <Line Type="bytes" Address="0x0166b890" Value="e9f3b7faff909090"/>
+      <Line Type="bytes" Address="0x0166b930" Value="e92bb7faff9090909090909090"/>
+    </PatchList>
+  </Metadata>
+</Patch>

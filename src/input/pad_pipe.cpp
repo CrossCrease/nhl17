@@ -67,17 +67,30 @@ std::string PadPipe::HandleCommand(const std::string& line) {
     int pressed = -1;
     stream >> name >> pressed;
     std::ranges::transform(name, name.begin(), [](unsigned char c) { return std::tolower(c); });
-    const auto button = std::ranges::find(PadButtons, name, &decltype(PadButtons)::value_type::first);
-    if (button == PadButtons.end() || (pressed != 0 && pressed != 1)) {
+    if (pressed != 0 && pressed != 1) {
         return "ERR expected <button> <0|1>";
     }
-    auto* controller = (*m_controllers)[0];
-    if (button->second == OrbisPadButtonDataOffset::L2) {
-        controller->Axis(Axis::TriggerLeft, pressed ? 255 : 0, false);
-    } else if (button->second == OrbisPadButtonDataOffset::R2) {
-        controller->Axis(Axis::TriggerRight, pressed ? 255 : 0, false);
+    u32 mask = ShareButton;
+    if (name != "share") {
+        const auto button =
+            std::ranges::find(PadButtons, name, &decltype(PadButtons)::value_type::first);
+        if (button == PadButtons.end()) {
+            return "ERR expected <button> <0|1>";
+        }
+        auto* controller = (*m_controllers)[0];
+        if (button->second == OrbisPadButtonDataOffset::L2) {
+            controller->Axis(Axis::TriggerLeft, pressed ? 255 : 0, false);
+        } else if (button->second == OrbisPadButtonDataOffset::R2) {
+            controller->Axis(Axis::TriggerRight, pressed ? 255 : 0, false);
+        }
+        controller->Button(button->second, pressed == 1);
+        mask = static_cast<u32>(button->second);
     }
-    controller->Button(button->second, pressed == 1);
+    if (pressed == 1) {
+        m_buttons.fetch_or(mask, std::memory_order_relaxed);
+    } else {
+        m_buttons.fetch_and(~mask, std::memory_order_relaxed);
+    }
     return "OK";
 }
 
@@ -98,8 +111,9 @@ void PadPipe::ServeLoop() {
             std::string pending;
             std::array<char, 512> buffer;
             DWORD read = 0;
-            while (ReadFile(pipe, buffer.data(), static_cast<DWORD>(buffer.size()), &read, nullptr) &&
-                   read > 0) {
+            while (
+                ReadFile(pipe, buffer.data(), static_cast<DWORD>(buffer.size()), &read, nullptr) &&
+                read > 0) {
                 pending.append(buffer.data(), read);
                 for (auto end = pending.find('\n'); end != std::string::npos;
                      end = pending.find('\n')) {

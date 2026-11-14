@@ -3,8 +3,8 @@
 #   powershell -NoProfile -ExecutionPolicy Bypass -File tools\package_release.ps1
 #
 # Output (artifacts\release\<version>\), uploaded unchanged as the assets of GitHub release v<version>:
-#   crosscrease-nhl17-runtime-<version>-windows-x64.zip  emulator runtime, default config, launch scripts
-#   crosscrease-nhl17-online-<version>.zip               client files for connecting to a CrossCrease server
+#   crosscrease-nhl17-runtime-<version>-windows-x64.zip  emulator runtime, default config, launch scripts and,
+#                                                        in online\, the public files for connecting to a CrossCrease server
 #   crosscrease-nhl17-feed.json                          package list with versions, sizes and SHA-256
 #   SHA256SUMS.txt
 #
@@ -16,7 +16,7 @@ param(
     [string]$OutputDirectory = '',
     [string]$ServerAddress = '',
     [string]$Repository = 'CrossCrease/nhl17',
-    [string]$MinimumLauncher = '0.4.0'
+    [string]$MinimumLauncher = '0.6.0'
 )
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName System.IO.Compression, System.IO.Compression.FileSystem
@@ -66,6 +66,13 @@ shadPS4 is licensed under the GNU General Public License v2.0 or later; see LICE
 The complete corresponding source code for this build is available at:
 $sourceUrl
 
+The online\ folder holds the public client files for connecting to a CrossCrease server (server
+address, the server's public CA certificate and the in-memory trust patch). They come from the
+CrossCrease Blaze server project and contain no private keys.
+
+The patches\ folder holds the CrossCrease compatibility patch for NHL 17 update 1.08, applied in
+memory when the game starts. It changes a few bytes of game code; the game files are not modified.
+
 No game files, console firmware, keys or saves are included. You need your own copy of NHL 17.
 "@
 
@@ -75,25 +82,30 @@ $runtimeFiles = 'shadPS4.exe', 'msvcp140.dll', 'msvcp140_atomic_wait.dll', 'vcru
 Copy-Listed (Resolve-Path -LiteralPath $RuntimeDirectory).Path $runtimeFiles (Join-Path $runtimeStage 'runtime')
 Copy-Listed (Join-Path $PSScriptRoot 'release\defaults\user') 'config.json', 'users.json' (Join-Path $runtimeStage 'runtime\defaults\user')
 Copy-Listed $PSScriptRoot 'run_nhl17.ps1', 'run_nhl17_online.ps1' (Join-Path $runtimeStage 'tools')
+Copy-Listed (Join-Path $root 'patches') 'nhl17-compat.xml' (Join-Path $runtimeStage 'patches')
 Copy-Listed $root 'LICENSE' $runtimeStage
 Copy-Item -LiteralPath (Join-Path $root 'LICENSES') -Destination (Join-Path $runtimeStage 'LICENSES') -Recurse
 Set-Content -LiteralPath (Join-Path $runtimeStage 'README.txt') -Value $notice -Encoding ASCII
-$runtimePackage = New-Package $runtimeStage "crosscrease-nhl17-runtime-$version-windows-x64.zip"
 
-# Online connection package (public files only; requirements.json lists what must never ship)
-$onlineStage = Join-Path $staging 'online'
+# Online connection files (public files only; requirements.json lists what must never ship)
+$onlineStage = Join-Path $runtimeStage 'online'
 $onlinePath = (Resolve-Path -LiteralPath $OnlineDirectory).Path
 Copy-Listed $onlinePath 'server_connection.json', 'requirements.json', 'README.md', 'generated\nhl17-crosscrease-ca.xml', 'generated\crosscrease-ca-cert.pem', 'generated\trust-manifest.json' $onlineStage
 $manifest = Get-Content -LiteralPath (Join-Path $onlineStage 'generated\trust-manifest.json') -Raw | ConvertFrom-Json
 if ($manifest.contains_private_key) { throw 'The trust manifest says it contains a private key; refusing to package it.' }
-if (@(Get-ChildItem -LiteralPath $onlineStage -Recurse -File | Select-String -Pattern '-----BEGIN ([A-Z]+ )?PRIVATE KEY-----' -CaseSensitive).Count -gt 0) { throw 'A private key was found in the online package.' }
+if (@(Get-ChildItem -LiteralPath $onlineStage -Recurse -File | Select-String -Pattern '-----BEGIN ([A-Z]+ )?PRIVATE KEY-----' -CaseSensitive).Count -gt 0) { throw 'A private key was found in the online connection files.' }
+$connectionFile = Join-Path $onlineStage 'server_connection.json'
 if ($ServerAddress) {
-    $connectionFile = Join-Path $onlineStage 'server_connection.json'
+    if ($ServerAddress -notmatch '^[a-zA-Z0-9.:-]+$') { throw "Invalid server address: $ServerAddress" }
     $connection = Get-Content -LiteralPath $connectionFile -Raw | ConvertFrom-Json
     $connection.server_address = $ServerAddress
     $connection | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $connectionFile -Encoding ASCII
 }
-$onlinePackage = New-Package $onlineStage "crosscrease-nhl17-online-$version.zip"
+$defaultServer = [string](Get-Content -LiteralPath $connectionFile -Raw | ConvertFrom-Json).server_address
+if ($defaultServer -match '^(localhost|127\.|10\.|192\.168\.|172\.(1[6-9]|2[0-9]|3[01])\.)') {
+    Write-Warning "The default server is $defaultServer, which only works on the packaging machine or its LAN. Pass -ServerAddress <public host name> for a public release."
+}
+$runtimePackage = New-Package $runtimeStage "crosscrease-nhl17-runtime-$version-windows-x64.zip"
 
 Remove-Item -LiteralPath $staging -Recurse -Force
 
@@ -109,18 +121,13 @@ $feed = [ordered]@{
     packages = @(
         [ordered]@{
             id = 'runtime'; name = 'NHL 17 runtime'; version = $version
-            description = 'shadPS4-based emulator runtime with CrossCrease NHL 17 compatibility work.'
+            description = 'shadPS4-based emulator runtime with CrossCrease NHL 17 compatibility work and the online connection files.'
             url = $runtimePackage.File; size = $runtimePackage.Size; sha256 = $runtimePackage.Sha256
-        },
-        [ordered]@{
-            id = 'online'; name = 'Online connection files'; version = $version
-            description = 'Public client files for connecting NHL 17 to a CrossCrease server.'
-            url = $onlinePackage.File; size = $onlinePackage.Size; sha256 = $onlinePackage.Sha256
         }
     )
 }
 $feedFile = Join-Path $out 'crosscrease-nhl17-feed.json'
 $feed | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $feedFile -Encoding ASCII
-@($runtimePackage, $onlinePackage) | ForEach-Object { "$($_.Sha256)  $($_.File)" } |
+@($runtimePackage) | ForEach-Object { "$($_.Sha256)  $($_.File)" } |
     Set-Content -LiteralPath (Join-Path $out 'SHA256SUMS.txt') -Encoding ASCII
 Get-ChildItem -LiteralPath $out | Select-Object Name, Length

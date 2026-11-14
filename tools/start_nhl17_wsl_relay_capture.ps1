@@ -5,8 +5,7 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 $root = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
-$blazeRoot = (Resolve-Path (Join-Path $root '..\blaze')).Path
-$relayRoot = Join-Path $blazeRoot 'Blaze15.1.1.3.0-nhl.01\Games\NHL17\PS4\v1.08\Server\TransportRelay'
+$relayRoot = (Resolve-Path (Join-Path $root '..\crosscrease-server17\components\TransportRelay')).Path
 $relay = $null
 try {
     $relay = & (Join-Path $relayRoot 'start_wsl_relay.ps1') -Label $Label -Distro $Distro
