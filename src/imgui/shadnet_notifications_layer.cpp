@@ -18,7 +18,12 @@ namespace ImGui::ShadNetNotify {
 constexpr float life_time = 6.0f;     // seconds a toast stays before fading out
 constexpr float fade_in = 0.25f;      // fade-in duration
 constexpr float fade_out = 0.5f;      // fade-out duration
+constexpr float warning_life_time = 20.0f;
 constexpr std::size_t kMaxToasts = 6; // oldest dropped beyond this
+
+constexpr float LifeTime(Kind kind) {
+    return kind == Kind::Warning ? warning_life_time : life_time;
+}
 
 struct Toast {
     Kind kind;
@@ -127,9 +132,7 @@ void ShadNetNotificationsUI::Draw() {
         for (auto& t : g_toasts) {
             t.age += io.DeltaTime;
         }
-        while (!g_toasts.empty() && g_toasts.front().age >= life_time) {
-            g_toasts.pop_front();
-        }
+        std::erase_if(g_toasts, [](const Toast& t) { return t.age >= LifeTime(t.kind); });
         snapshot.assign(g_toasts.begin(), g_toasts.end());
     }
     if (snapshot.empty()) {
@@ -154,7 +157,7 @@ void ShadNetNotificationsUI::Draw() {
         // Newest first.
         for (auto it = snapshot.rbegin(); it != snapshot.rend(); ++it) {
             float alpha = 1.0f;
-            const float remaining = life_time - it->age;
+            const float remaining = LifeTime(it->kind) - it->age;
             if (it->age < fade_in) {
                 alpha = it->age / fade_in;
             } else if (remaining < fade_out) {

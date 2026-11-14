@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include <algorithm>
+#include <fmt/format.h>
 #include "common/logging/log.h"
 #include "core/libraries/np/np_error.h"
 #include "core/libraries/np/np_handler/np_handler.h"
@@ -132,7 +133,10 @@ s32 NpHandler::SendFriendRequest(s32 user_id, const std::string& npid) {
     if (!client->IsAuthenticated()) {
         return ORBIS_NP_ERROR_SIGNED_OUT;
     }
-    client->AddFriend(npid);
+    {
+        std::lock_guard pending_lock(m_mutex_pending_friend);
+        m_pending_friend[client->AddFriend(npid)] = {user_id, npid};
+    }
     LOG_INFO(NpHandler, "user_id={} AddFriend '{}'", user_id, npid);
 
     std::lock_guard lock(m_mutex_friend_state);
@@ -144,6 +148,45 @@ s32 NpHandler::SendFriendRequest(s32 user_id, const std::string& npid) {
         st.requests_sent.push_back(npid);
     }
     return ORBIS_OK;
+}
+
+void NpHandler::OnFriendRequestReply(u64 pkt_id, ShadNet::ErrorType error) {
+    std::pair<s32, std::string> request;
+    {
+        std::lock_guard lock(m_mutex_pending_friend);
+        const auto it = m_pending_friend.find(pkt_id);
+        if (it == m_pending_friend.end()) {
+            return;
+        }
+        request = std::move(it->second);
+        m_pending_friend.erase(it);
+    }
+    if (error == ShadNet::ErrorType::NoError) {
+        return;
+    }
+    const auto& [user_id, npid] = request;
+    LOG_WARNING(NpHandler, "user_id={} AddFriend '{}' failed (error {})", user_id, npid,
+                static_cast<int>(error));
+    {
+        std::lock_guard lock(m_mutex_friend_state);
+        auto& sent = m_friend_state[user_id].requests_sent;
+        sent.erase(std::remove(sent.begin(), sent.end(), npid), sent.end());
+    }
+    std::string message;
+    switch (error) {
+    case ShadNet::ErrorType::NotFound:
+        message = fmt::format("No player called '{}' on this server.", npid);
+        break;
+    case ShadNet::ErrorType::AlreadyFriend:
+        message = fmt::format("You are already friends with {}.", npid);
+        break;
+    default:
+        message = fmt::format("Could not send a friend request to {} (blocked by you, or a "
+                              "friend list is full).",
+                              npid);
+        break;
+    }
+    ImGui::ShadNetNotify::Push(ImGui::ShadNetNotify::Kind::Info, message);
 }
 
 s32 NpHandler::RemoveFriend(s32 user_id, const std::string& npid) {

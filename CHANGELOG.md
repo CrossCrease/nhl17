@@ -5,7 +5,8 @@ Changes to CrossCrease NHL 17 releases. Versions follow [semantic versioning](ht
 ## Unreleased (0.3.0) — Online passwords
 
 - `tools/run_nhl17_online.ps1` takes `-Password` and signs in with it (the CrossCrease launcher 0.7.0 passes the player's Password setting). Without it the shared developer password `local-only` is sent, which CrossCrease servers on the Internet refuse.
-- A rejected sign-in shows a notification: wrong password, online ID not accepted, or refused (too many wrong passwords or a suspended account). Before, the game only stayed offline.
+- A rejected sign-in shows a notification: wrong password, online ID not accepted, or refused (too many wrong passwords or a suspended account). Before, the game only stayed offline. These server warnings stay on screen for 20 seconds (other notifications 6), so they are still visible after the boot logos.
+- A friend request from the friends overlay (F2) that the server refuses shows why: no player with that online ID, already friends, or refused (you blocked them, or a friend list is full). Before, the name stayed under sent requests with no reply. Blocking needs a CrossCrease server with blocking support.
 
 ## 0.2.0 — Online files included, background pad input, invite fix
 

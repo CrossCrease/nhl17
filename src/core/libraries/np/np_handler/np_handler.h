@@ -488,6 +488,10 @@ private:
     };
     mutable std::mutex m_mutex_pending_lookup;
     std::map<u64, PendingLookupRequest> m_pending_lookup;
+
+    std::mutex m_mutex_pending_friend;
+    std::map<u64, std::pair<s32, std::string>> m_pending_friend;
+    void OnFriendRequestReply(u64 pkt_id, ShadNet::ErrorType error);
     void OnLookupReply(s32 user_id, ShadNet::CommandType cmd, u64 pkt_id, ShadNet::ErrorType error,
                        const std::vector<u8>& body);
 

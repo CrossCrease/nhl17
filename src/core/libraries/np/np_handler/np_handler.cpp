@@ -320,19 +320,19 @@ bool NpHandler::ConnectUser(s32 user_id, const std::string& host, u16 port, cons
         switch (auth_state) {
         case ShadNet::ShadNetState::FailurePassword:
             ImGui::ShadNetNotify::Push(
-                ImGui::ShadNetNotify::Kind::Info,
+                ImGui::ShadNetNotify::Kind::Warning,
                 fmt::format("Sign-in failed: wrong password for online ID '{}'. Check the "
                             "password in the launcher's Game settings.",
                             npid));
             break;
         case ShadNet::ShadNetState::FailureUsername:
             ImGui::ShadNetNotify::Push(
-                ImGui::ShadNetNotify::Kind::Info,
+                ImGui::ShadNetNotify::Kind::Warning,
                 fmt::format("Sign-in failed: the server does not accept online ID '{}'.", npid));
             break;
         case ShadNet::ShadNetState::FailureAuth:
             ImGui::ShadNetNotify::Push(
-                ImGui::ShadNetNotify::Kind::Info,
+                ImGui::ShadNetNotify::Kind::Warning,
                 fmt::format("Sign-in failed: the server refused online ID '{}' (too many wrong "
                             "passwords, or the account is suspended).",
                             npid));
@@ -692,6 +692,8 @@ void NpHandler::OnAsyncReply(s32 user_id, ShadNet::CommandType cmd, u64 pkt_id,
         OnLookupReply(user_id, cmd, pkt_id, error, body);
     } else if (cmd == ShadNet::CommandType::GetAuthorizationCode) {
         OnAuthReply(user_id, cmd, pkt_id, error, body);
+    } else if (cmd == ShadNet::CommandType::AddFriend) {
+        OnFriendRequestReply(pkt_id, error);
     } else {
         OnScoreReply(user_id, cmd, pkt_id, error, body);
     }
