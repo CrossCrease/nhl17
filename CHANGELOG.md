@@ -8,6 +8,7 @@ Changes to CrossCrease NHL 17 releases. Versions follow [semantic versioning](ht
 - The password is never written to disk: the script leaves `shadnet_password` in `users.json` empty and hands the password to the emulator in `SHADPS4_SHADNET_PASSWORD`, which the emulator uses for the primary user and then removes from its environment.
 - A rejected sign-in shows a notification: wrong password, online ID not accepted, or refused (too many wrong passwords or a suspended account). Before, the game only stayed offline. These server warnings stay on screen for 20 seconds (other notifications 6), so they are still visible after the boot logos.
 - A friend request from the friends overlay (F2) that the server refuses shows why: no player with that online ID, already friends, or refused (you blocked them, or a friend list is full). Before, the name stayed under sent requests with no reply. Blocking needs a CrossCrease server with blocking support.
+- New `tools/rename_online_id.ps1` renames the player's online ID on the server and keeps the account (HUT, stats, friends, password). The CrossCrease launcher runs it when a player changes their Online ID in Player settings and chooses to rename. The password comes from `CROSSCREASE_SETTING_PASSWORD` (developers can use `-Password`). Needs a CrossCrease server with renaming; older servers give a clear message. The runtime package includes it.
 
 ## 0.2.0 — Online files included, background pad input, invite fix
 

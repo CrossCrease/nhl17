@@ -8,7 +8,7 @@ CrossCrease players never build this project. The CrossCrease launcher downloads
 
 | File | Contents |
 | --- | --- |
-| `crosscrease-nhl17-runtime-<version>-windows-x64.zip` | `runtime\shadPS4.exe` and its Visual C++ runtime DLLs, `runtime\defaults\user\` (default `config.json` and `users.json`), `tools\run_nhl17.ps1`, `tools\run_nhl17_online.ps1`, `LICENSE`, `LICENSES\`, a `README.txt` that names the exact source tag, and `online\`: the public client files from the Blaze project's NHL 17 player pack (`server_connection.json`, `requirements.json`, `README.md`, and `generated\` with the server's public CA certificate, trust patch and trust manifest). |
+| `crosscrease-nhl17-runtime-<version>-windows-x64.zip` | `runtime\shadPS4.exe` and its Visual C++ runtime DLLs, `runtime\defaults\user\` (default `config.json` and `users.json`), `tools\run_nhl17.ps1`, `tools\run_nhl17_online.ps1`, `tools\rename_online_id.ps1`, `LICENSE`, `LICENSES\`, a `README.txt` that names the exact source tag, and `online\`: the public client files from the Blaze project's NHL 17 player pack (`server_connection.json`, `requirements.json`, `README.md`, and `generated\` with the server's public CA certificate, trust patch and trust manifest). |
 | `crosscrease-nhl17-feed.json` | The list the launcher reads: release version, minimum launcher version, and each package's version, size and SHA-256. |
 | `SHA256SUMS.txt` | Checksum of the ZIP file. |
 

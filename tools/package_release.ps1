@@ -81,7 +81,7 @@ $runtimeStage = Join-Path $staging 'runtime'
 $runtimeFiles = 'shadPS4.exe', 'msvcp140.dll', 'msvcp140_atomic_wait.dll', 'vcruntime140.dll', 'vcruntime140_1.dll'
 Copy-Listed (Resolve-Path -LiteralPath $RuntimeDirectory).Path $runtimeFiles (Join-Path $runtimeStage 'runtime')
 Copy-Listed (Join-Path $PSScriptRoot 'release\defaults\user') 'config.json', 'users.json' (Join-Path $runtimeStage 'runtime\defaults\user')
-Copy-Listed $PSScriptRoot 'run_nhl17.ps1', 'run_nhl17_online.ps1' (Join-Path $runtimeStage 'tools')
+Copy-Listed $PSScriptRoot 'run_nhl17.ps1', 'run_nhl17_online.ps1', 'rename_online_id.ps1' (Join-Path $runtimeStage 'tools')
 Copy-Listed (Join-Path $root 'patches') 'nhl17-compat.xml' (Join-Path $runtimeStage 'patches')
 Copy-Listed $root 'LICENSE' $runtimeStage
 Copy-Item -LiteralPath (Join-Path $root 'LICENSES') -Destination (Join-Path $runtimeStage 'LICENSES') -Recurse
