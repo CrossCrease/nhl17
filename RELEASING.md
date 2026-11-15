@@ -22,10 +22,12 @@ Packages are built from an allowlist. The script never includes game files, `gam
 4. Package:
 
    ```powershell
-   powershell -NoProfile -ExecutionPolicy Bypass -File tools\package_release.ps1
+   powershell -NoProfile -ExecutionPolicy Bypass -File tools\package_release.ps1 -ServerAddress nhl17.crosscrease.com
    ```
 
-   Options: `-ServerAddress <host>` sets the default server in `online\server_connection.json` (use a DNS name you control for a public release, so the server can be rented or moved later without a new package; the script warns when the default is loopback or private), `-MinimumLauncher <version>` sets the oldest launcher that may install this release, and `-OnlineDirectory` / `-RuntimeDirectory` select other inputs.
+   Public releases use `nhl17.crosscrease.com` as the default server. Each CrossCrease game server has its own host name, `<game id>.crosscrease.com`, so one game's server can move to another machine by changing one DNS record. Releases up to 0.4.0 use `crosscrease.com`, so that name must keep pointing at the NHL 17 server while those releases are in use.
+
+   Options: `-ServerAddress <host>` sets the default server in `online\server_connection.json` (without it the package keeps the developer default `127.0.0.1`; the script warns when the default is loopback or private, or does not resolve), `-MinimumLauncher <version>` sets the oldest launcher that may install this release, and `-OnlineDirectory` / `-RuntimeDirectory` select other inputs.
 5. Test it with the launcher before publishing: put the feed into `%LOCALAPPDATA%\CrossCrease\feeds.json` (see the launcher README), then download, play and update through the launcher.
    Release order when the launcher profile depends on a new runtime (launcher 0.6.0 requires runtime 0.2.0 through `minimum_versions`): publish the NHL 17 release first, then the launcher. The feed's `minimum_launcher` makes older launchers ask for a launcher update before they install it.
 6. Tag the source as `v<version>`, create the GitHub release `v<version>` in `CrossCrease/nhl17`, and upload all three files unchanged. Mark prereleases as prereleases, because the launcher's feed URL (`releases/latest/download/crosscrease-nhl17-feed.json`) only follows full releases.

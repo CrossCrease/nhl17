@@ -105,6 +105,8 @@ $defaultServer = [string](Get-Content -LiteralPath $connectionFile -Raw | Conver
 if ($defaultServer -match '^(localhost|127\.|10\.|192\.168\.|172\.(1[6-9]|2[0-9]|3[01])\.)') {
     Write-Warning "The default server is $defaultServer, which only works on the packaging machine or its LAN. Pass -ServerAddress <public host name> for a public release."
 }
+try { [void][Net.Dns]::GetHostAddresses(($defaultServer -split ':')[0]) }
+catch { Write-Warning "The default server $defaultServer does not resolve. Players could not connect; add its DNS record before publishing this package." }
 $runtimePackage = New-Package $runtimeStage "crosscrease-nhl17-runtime-$version-windows-x64.zip"
 
 Remove-Item -LiteralPath $staging -Recurse -Force
