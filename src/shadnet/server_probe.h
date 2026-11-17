@@ -25,6 +25,9 @@ struct ProbeInfo {
     u32 server_version = 0;
 };
 
-ProbeInfo ProbeServer(const std::string& host, u16 port, u32 timeout_ms = SHAD_PROBE_TIMEOUT_MS);
+// With a CA certificate file the connection is TLS and the server must present a certificate
+// issued by that CA.
+ProbeInfo ProbeServer(const std::string& host, u16 port, const std::string& ca_file,
+                      u32 timeout_ms = SHAD_PROBE_TIMEOUT_MS);
 
 } // namespace ShadNet

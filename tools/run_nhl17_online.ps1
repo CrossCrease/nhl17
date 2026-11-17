@@ -60,7 +60,15 @@ try {
     $config = Get-Content -LiteralPath $configPath -Raw | ConvertFrom-Json
     $config.Network.connected_to_network = $true
     $config.Network.shad_net_enabled = $true
-    $config.Network.shadnet_server = "${ServerAddress}:$($connection.identity_tcp_port)"
+    # Sign-in is encrypted when the connection files name a TLS port and the CA certificate.
+    $caCertificate = ''
+    $identityPort = $connection.identity_tcp_port
+    if ($connection.identity_tls_port) {
+        $identityPort = $connection.identity_tls_port
+        $caCertificate = (Resolve-Path -LiteralPath (Join-Path $connectionPath ([string]$connection.identity_ca_certificate_file))).Path
+    }
+    $config.Network.shadnet_server = "${ServerAddress}:$identityPort"
+    $config.Network | Add-Member -NotePropertyName shadnet_ca_certificate -NotePropertyValue $caCertificate -Force
     $config.Network.shadnet_webapi_server = "http://${ServerAddress}:$($connection.psn_webapi_http_port)"
     $config | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath $configPath
     $users = Get-Content -LiteralPath $usersPath -Raw | ConvertFrom-Json

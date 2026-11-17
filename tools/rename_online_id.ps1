@@ -3,6 +3,9 @@
 # their Online ID and chooses to rename. The launcher passes the password in the
 # CROSSCREASE_SETTING_PASSWORD environment variable; developers can use -Password.
 #
+# The request travels over TLS when the connection files name an encrypted sign-in port; the server
+# must then present a certificate issued by the CrossCrease CA in the connection files.
+#
 # Prints one line for the player and exits with 0 when the server renamed the account.
 param(
     [Parameter(Mandatory = $true)][ValidatePattern('^[a-zA-Z0-9_-]{3,16}$')][string]$OnlineId,
@@ -31,6 +34,26 @@ try {
 if (-not $ServerAddress -or $ServerAddress -eq 'default') { $ServerAddress = [string]$connection.server_address }
 if ($ServerAddress -notmatch '^[a-zA-Z0-9.:-]+$') { Fail "Invalid server address: $ServerAddress" }
 $port = [int]$connection.identity_tcp_port
+$caCertificate = $null
+if ($connection.identity_tls_port) {
+    $port = [int]$connection.identity_tls_port
+    try {
+        $caCertificate = New-Object Security.Cryptography.X509Certificates.X509Certificate2 (Join-Path $ConnectionDirectory ([string]$connection.identity_ca_certificate_file))
+    } catch {
+        Fail "The runtime's server certificate is missing ($ConnectionDirectory)."
+    }
+}
+
+# Accepts only a server certificate issued by the CrossCrease CA from the connection files.
+function Test-ServerCertificate($certificate) {
+    $chain = New-Object Security.Cryptography.X509Certificates.X509Chain
+    $chain.ChainPolicy.RevocationMode = 'NoCheck'
+    $chain.ChainPolicy.VerificationFlags = 'AllowUnknownCertificateAuthority'
+    [void]$chain.ChainPolicy.ExtraStore.Add($caCertificate)
+    if (-not $chain.Build((New-Object Security.Cryptography.X509Certificates.X509Certificate2 $certificate))) { return $false }
+    $root = $chain.ChainElements[$chain.ChainElements.Count - 1].Certificate
+    return $chain.ChainElements.Count -ge 2 -and $root.Thumbprint -eq $caCertificate.Thumbprint
+}
 
 function Field([int]$number, [string]$value) {
     $bytes = [Text.Encoding]::UTF8.GetBytes($value)
@@ -68,6 +91,12 @@ try {
 try {
     $stream = $client.GetStream()
     $stream.ReadTimeout = 15000
+    if ($caCertificate) {
+        $validate = [Net.Security.RemoteCertificateValidationCallback] { param($sender, $certificate, $chain, $errors) Test-ServerCertificate $certificate }
+        $stream = New-Object Net.Security.SslStream $stream, $false, $validate
+        $stream.ReadTimeout = 15000
+        $stream.AuthenticateAsClient($ServerAddress, $null, [Security.Authentication.SslProtocols]::Tls12, $false)
+    }
     $stream.Write($packet, 0, $packet.Length)
     while ($true) {
         $header = Read-Exact $stream 15

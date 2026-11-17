@@ -13,6 +13,7 @@
 #include "common/scm_rev.h"
 #include "common/thread.h"
 #include "shadnet.pb.h"
+#include "shadnet/tls.h"
 
 #ifdef _WIN32
 #pragma comment(lib, "Ws2_32.lib")
@@ -62,6 +63,10 @@ ShadNetClient::ShadNetClient() {
 
 ShadNetClient::~ShadNetClient() {
     Stop();
+}
+
+void ShadNetClient::SetCaCertificate(const std::string& ca_file) {
+    m_ca_file = ca_file;
 }
 
 void ShadNetClient::Start(const std::string& host, u16 port, const std::string& npid,
@@ -293,6 +298,7 @@ void ShadNetClient::WriterThread() {
 
 bool ShadNetClient::DoConnect() {
     m_state = ShadNetState::Ok; // reset; this attempt sets a failure code only on error
+    m_tls.reset();
     struct addrinfo hints{}, *res_list = nullptr;
     hints.ai_family = AF_INET;
     hints.ai_socktype = SOCK_STREAM;
@@ -355,18 +361,22 @@ bool ShadNetClient::DoConnect() {
         return false;
     }
 
-    // Restore blocking mode for RecvN / SendAll
+    if (!m_ca_file.empty()) {
+        m_tls = std::make_unique<TlsChannel>();
+        if (!m_tls->Connect(m_sock, m_ca_file, SHAD_CONNECT_TIMEOUT_MS)) {
+            DoDisconnect();
+            m_state = ShadNetState::FailureConnect;
+            return false;
+        }
+    } else {
+        // Restore blocking mode for RecvN / SendAll
 #ifdef _WIN32
-    {
         u_long nb = 0;
         ::ioctlsocket(m_sock, FIONBIO, &nb);
-    }
 #else
-    {
-        int fl = ::fcntl(m_sock, F_GETFL, 0);
-        ::fcntl(m_sock, F_SETFL, fl & ~O_NONBLOCK);
-    }
+        ::fcntl(m_sock, F_SETFL, ::fcntl(m_sock, F_GETFL, 0) & ~O_NONBLOCK);
 #endif
+    }
 
     struct sockaddr_in local{};
     socklen_t alen = sizeof(local);
@@ -393,7 +403,7 @@ bool ShadNetClient::DoConnect() {
 
     // ServerInfo handshake
     u8 hdr[SHAD_HEADER_SIZE];
-    if (!RecvN(hdr, SHAD_HEADER_SIZE)) {
+    if (!RecvN(hdr, SHAD_HEADER_SIZE, SHAD_CONNECT_TIMEOUT_MS)) {
         LOG_ERROR(ShadNet, "Timeout reading ServerInfo header");
         DoDisconnect();
         m_state = ShadNetState::FailureServerInfo;
@@ -408,7 +418,7 @@ bool ShadNetClient::DoConnect() {
     const u32 total_sz = GetLE32(hdr + 3);
     const u32 payload_sz = (total_sz > SHAD_HEADER_SIZE) ? total_sz - SHAD_HEADER_SIZE : 0;
     std::vector<u8> si_payload(payload_sz);
-    if (payload_sz > 0 && !RecvN(si_payload.data(), payload_sz)) {
+    if (payload_sz > 0 && !RecvN(si_payload.data(), payload_sz, SHAD_CONNECT_TIMEOUT_MS)) {
         LOG_ERROR(ShadNet, "Timeout reading ServerInfo payload");
         DoDisconnect();
         m_state = ShadNetState::FailureServerInfo;
@@ -441,6 +451,8 @@ bool ShadNetClient::DoConnect() {
 }
 
 void ShadNetClient::DoDisconnect() {
+    if (m_tls)
+        m_tls->Close();
     if (m_sock != SHAD_INVALID_SOCK) {
 #ifdef _WIN32
         ::shutdown(m_sock, SD_BOTH);
@@ -452,8 +464,24 @@ void ShadNetClient::DoDisconnect() {
     }
 }
 
-bool ShadNetClient::RecvN(u8* buf, u32 n) {
+bool ShadNetClient::RecvN(u8* buf, u32 n, u32 timeout_ms) {
     u32 received = 0;
+    if (m_tls) {
+        const auto deadline =
+            std::chrono::steady_clock::now() + std::chrono::milliseconds(timeout_ms);
+        while (received < n) {
+            if (m_terminate)
+                return false;
+            const int r = m_tls->Read(buf + received, n - received, 250);
+            if (r == 0)
+                return false;
+            if (r > 0)
+                received += static_cast<u32>(r);
+            else if (timeout_ms != 0 && std::chrono::steady_clock::now() >= deadline)
+                return false;
+        }
+        return true;
+    }
     while (received < n) {
         if (m_terminate)
             return false;
@@ -468,6 +496,13 @@ bool ShadNetClient::RecvN(u8* buf, u32 n) {
 
 bool ShadNetClient::SendAll(const std::vector<u8>& data) {
     std::lock_guard lock(m_mutex_send_direct);
+    if (m_tls) {
+        if (!m_tls->Write(data.data(), static_cast<u32>(data.size()))) {
+            LOG_ERROR(ShadNet, "TLS send failed");
+            return false;
+        }
+        return true;
+    }
     int sent = 0;
     const int total = static_cast<int>(data.size());
     while (sent < total) {

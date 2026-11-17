@@ -237,6 +237,8 @@ struct NetworkSettings {
     Setting<bool> shad_net_enabled{false};
     Setting<std::string> shadnet_server{"srv.shadps4.net:31313"};
     Setting<std::string> shadnet_webapi_server{"http://srv.shadps4.net:31315"};
+    // CA certificate (PEM) the shadNet server's certificate must chain to; empty = no TLS.
+    Setting<std::string> shadnet_ca_certificate{""};
     Setting<bool> enable_upnp{true};
     Setting<int> p2p_port{3658}; // 0 is any free port, 3658 is the default PS4 port. With UPnP
                                  // enabled it is forwarded on the router.
@@ -251,6 +253,8 @@ struct NetworkSettings {
             make_override<NetworkSettings>("shadnet_server", &NetworkSettings::shadnet_server),
             make_override<NetworkSettings>("shadnet_webapi_server",
                                            &NetworkSettings::shadnet_webapi_server),
+            make_override<NetworkSettings>("shadnet_ca_certificate",
+                                           &NetworkSettings::shadnet_ca_certificate),
             make_override<NetworkSettings>("enable_upnp", &NetworkSettings::enable_upnp),
             make_override<NetworkSettings>("p2p_port", &NetworkSettings::p2p_port),
             make_override<NetworkSettings>("disable_https", &NetworkSettings::disable_https),
@@ -260,8 +264,8 @@ struct NetworkSettings {
 };
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(NetworkSettings, connected_to_network, shad_net_enabled,
-                                   shadnet_server, shadnet_webapi_server, enable_upnp, p2p_port,
-                                   disable_https, enable_device_discovery)
+                                   shadnet_server, shadnet_webapi_server, shadnet_ca_certificate,
+                                   enable_upnp, p2p_port, disable_https, enable_device_discovery)
 
 // -------------------------------
 // Log settings
@@ -707,6 +711,7 @@ public:
     // Network settings
     SETTING_FORWARD_BOOL(m_network, ConnectedToNetwork, connected_to_network)
     SETTING_FORWARD(m_network, ShadNetServer, shadnet_server)
+    SETTING_FORWARD(m_network, ShadNetCaCertificate, shadnet_ca_certificate)
     std::string GetShadNetWebApiServer() const {
         // Strip trailing slashes if exists
         std::string url = m_network.shadnet_webapi_server.get(m_configMode);

@@ -6,6 +6,7 @@
 #include <atomic>
 #include <condition_variable>
 #include <functional>
+#include <memory>
 #include <mutex>
 #include <optional>
 #include <semaphore>
@@ -34,6 +35,8 @@ static constexpr ShadSocketHandle SHAD_INVALID_SOCK = -1;
 #endif
 
 namespace ShadNet {
+
+class TlsChannel;
 
 // Protocol constants
 static constexpr u32 SHAD_HEADER_SIZE = 15;
@@ -304,6 +307,9 @@ public:
     ShadNetClient(const ShadNetClient&) = delete;
     ShadNetClient& operator=(const ShadNetClient&) = delete;
 
+    // With a CA certificate file, the connection is TLS and the server certificate must be issued
+    // by that CA. Call before Start().
+    void SetCaCertificate(const std::string& ca_file);
     void Start(const std::string& host, u16 port, const std::string& npid,
                const std::string& password, const std::string& token = {});
     void Stop();
@@ -381,7 +387,7 @@ private:
     void WriterThread();
     bool DoConnect();
     void DoDisconnect();
-    bool RecvN(u8* buf, u32 n);
+    bool RecvN(u8* buf, u32 n, u32 timeout_ms = 0);
     bool SendAll(const std::vector<u8>& data);
     std::vector<u8> BuildPacket(CommandType cmd, u64 id, const std::vector<u8>& payload) const;
     void DispatchPacket(PacketType type, u16 cmd_raw, u64 pkt_id, const std::vector<u8>& payload);
@@ -402,6 +408,8 @@ private:
     static u64 GetLE64(const u8* p);
 
     ShadSocketHandle m_sock = SHAD_INVALID_SOCK;
+    std::string m_ca_file;
+    std::unique_ptr<TlsChannel> m_tls;
     std::string m_host;
     u16 m_port = 31313;
     std::string m_npid;

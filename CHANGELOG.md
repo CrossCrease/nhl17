@@ -2,6 +2,19 @@
 
 Changes to CrossCrease NHL 17 releases. Versions follow [semantic versioning](https://semver.org/); the version source of truth is `tools/release/VERSION`. See [RELEASING.md](RELEASING.md) for how releases are built.
 
+## 0.4.2 — Encrypted sign-in
+
+- Signing in to the CrossCrease server is encrypted (TLS). Before, the online ID, password and
+  sign-in token crossed the network in plain text. The emulator's shadNet connection, its
+  server check and `tools/rename_online_id.ps1` connect to the server's encrypted sign-in port
+  (`identity_tls_port`, 31318, in `online\server_connection.json`) and accept only a server
+  certificate issued by the CrossCrease CA that ships in `online\generated\`; the Windows
+  certificate store is not used. There is no fallback to the unencrypted port.
+- New emulator setting `Network.shadnet_ca_certificate` (CA certificate file; empty keeps the
+  unencrypted connection). `tools/run_nhl17_online.ps1` sets it for the session.
+- Needs a CrossCrease server 0.3.4 or newer. Older servers have no encrypted sign-in, so this
+  runtime cannot sign in to them.
+
 ## 0.4.1 — Own server name
 
 - The default server is `nhl17.crosscrease.com` (before: `crosscrease.com`). Both names reach the same server, so players on older releases keep connecting and nobody has to change a setting. A custom Server setting in the launcher is not affected.

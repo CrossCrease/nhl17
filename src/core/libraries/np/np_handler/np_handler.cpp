@@ -164,7 +164,8 @@ void NpHandler::Initialize() {
 
     {
         const auto [host, port] = ParseServerAddress();
-        const ShadNet::ProbeInfo probe = ShadNet::ProbeServer(host, port);
+        const ShadNet::ProbeInfo probe =
+            ShadNet::ProbeServer(host, port, EmulatorSettings.GetShadNetCaCertificate());
         if (probe.result != ShadNet::ProbeResult::Ok) {
             EmulatorSettings.SetShadNetSessionDisabled(true);
             switch (probe.result) {
@@ -262,6 +263,7 @@ bool NpHandler::ConnectUser(s32 user_id, const std::string& host, u16 port, cons
              host, port, ShadNet::SHAD_CONNECT_TIMEOUT_MS / 1000);
 
     auto client = std::make_shared<ShadNet::ShadNetClient>();
+    client->SetCaCertificate(EmulatorSettings.GetShadNetCaCertificate());
 
     // Wire per-user notification callbacks
     client->onFriendQuery = [this, user_id](const ShadNet::NotifyFriendQuery& n) {

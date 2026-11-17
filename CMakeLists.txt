@@ -1318,6 +1318,8 @@ set(SHADNET src/shadnet/client.cpp
             src/shadnet/client.h
             src/shadnet/server_probe.cpp
             src/shadnet/server_probe.h
+            src/shadnet/tls.cpp
+            src/shadnet/tls.h
             "${SHADNET_PROTO_OUT}/shadnet.pb.cc"
 )
 if (APPLE)

@@ -1,11 +1,14 @@
 // SPDX-FileCopyrightText: Copyright 2026 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <chrono>
+#include <memory>
 #include <string>
 #include <vector>
 #include "common/logging/log.h"
 #include "shadnet/client.h" // socket platform typedefs + protocol constants
 #include "shadnet/server_probe.h"
+#include "shadnet/tls.h"
 
 #ifdef _WIN32
 #pragma comment(lib, "Ws2_32.lib")
@@ -28,12 +31,16 @@ static u32 ProbeGetLE32(const u8* p) {
            (static_cast<u32>(p[3]) << 24);
 }
 
-// recv() exactly n bytes (blocking, bounded by the socket's SO_RCVTIMEO).
-static bool ProbeRecvN(ShadSocketHandle sock, u8* buf, u32 n) {
+// Read exactly n bytes: plain recv() is bounded by the socket's SO_RCVTIMEO, TLS by timeout_ms.
+static bool ProbeRecvN(ShadSocketHandle sock, TlsChannel* tls, u8* buf, u32 n, u32 timeout_ms) {
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeout_ms);
     u32 got = 0;
     while (got < n) {
-        const int r =
-            ::recv(sock, reinterpret_cast<char*>(buf) + got, static_cast<int>(n - got), 0);
+        const int r = tls ? tls->Read(buf + got, n - got, 250)
+                          : static_cast<int>(::recv(sock, reinterpret_cast<char*>(buf) + got,
+                                                    static_cast<int>(n - got), 0));
+        if (r == -1 && tls && std::chrono::steady_clock::now() < deadline)
+            continue;
         if (r <= 0)
             return false;
         got += static_cast<u32>(r);
@@ -41,7 +48,8 @@ static bool ProbeRecvN(ShadSocketHandle sock, u8* buf, u32 n) {
     return true;
 }
 
-ProbeInfo ProbeServer(const std::string& host, u16 port, u32 timeout_ms) {
+ProbeInfo ProbeServer(const std::string& host, u16 port, const std::string& ca_file,
+                      u32 timeout_ms) {
     ProbeInfo info{};
 
     if (host.empty()) {
@@ -110,29 +118,43 @@ ProbeInfo ProbeServer(const std::string& host, u16 port, u32 timeout_ms) {
         return info; // Unreachable
     }
 
-    // Restore blocking mode and apply a receive timeout for the ServerInfo read.
-#ifdef _WIN32
-    {
-        u_long nb = 0;
-        ::ioctlsocket(sock, FIONBIO, &nb);
-    }
-    DWORD so_rcv = static_cast<DWORD>(timeout_ms);
-#else
-    {
-        int fl = ::fcntl(sock, F_GETFL, 0);
-        ::fcntl(sock, F_SETFL, fl & ~O_NONBLOCK);
-    }
-    struct timeval so_rcv{};
-    so_rcv.tv_sec = static_cast<decltype(so_rcv.tv_sec)>(timeout_ms / 1000);
-    so_rcv.tv_usec = static_cast<decltype(so_rcv.tv_usec)>((timeout_ms % 1000) * 1000);
-#endif
-    ::setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, reinterpret_cast<const char*>(&so_rcv),
-                 sizeof(so_rcv));
-
     info.result = ProbeResult::ProtocolError;
 
+    std::unique_ptr<TlsChannel> tls;
+    if (!ca_file.empty()) {
+        tls = std::make_unique<TlsChannel>();
+        if (!tls->Connect(sock, ca_file, timeout_ms)) {
+            tls.reset();
+            SHAD_CLOSE(sock);
+            LOG_WARNING(ShadNet, "probe: {}:{} reachable but the encrypted connection failed", host,
+                        port);
+            return info;
+        }
+    }
+
+    // Restore blocking mode and apply a receive timeout for the ServerInfo read.
+    if (!tls) {
+#ifdef _WIN32
+        {
+            u_long nb = 0;
+            ::ioctlsocket(sock, FIONBIO, &nb);
+        }
+        DWORD so_rcv = static_cast<DWORD>(timeout_ms);
+#else
+        {
+            int fl = ::fcntl(sock, F_GETFL, 0);
+            ::fcntl(sock, F_SETFL, fl & ~O_NONBLOCK);
+        }
+        struct timeval so_rcv{};
+        so_rcv.tv_sec = static_cast<decltype(so_rcv.tv_sec)>(timeout_ms / 1000);
+        so_rcv.tv_usec = static_cast<decltype(so_rcv.tv_usec)>((timeout_ms % 1000) * 1000);
+#endif
+        ::setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, reinterpret_cast<const char*>(&so_rcv),
+                     sizeof(so_rcv));
+    }
+
     u8 hdr[SHAD_HEADER_SIZE];
-    if (!ProbeRecvN(sock, hdr, SHAD_HEADER_SIZE)) {
+    if (!ProbeRecvN(sock, tls.get(), hdr, SHAD_HEADER_SIZE, timeout_ms)) {
         SHAD_CLOSE(sock);
         LOG_WARNING(ShadNet, "probe: {}:{} reachable but no ServerInfo header received", host,
                     port);
@@ -154,7 +176,7 @@ ProbeInfo ProbeServer(const std::string& host, u16 port, u32 timeout_ms) {
     }
     const u32 payload_sz = total_sz - SHAD_HEADER_SIZE;
     std::vector<u8> payload(payload_sz);
-    if (payload_sz > 0 && !ProbeRecvN(sock, payload.data(), payload_sz)) {
+    if (payload_sz > 0 && !ProbeRecvN(sock, tls.get(), payload.data(), payload_sz, timeout_ms)) {
         SHAD_CLOSE(sock);
         LOG_WARNING(ShadNet, "probe: {}:{} ServerInfo payload read failed", host, port);
         return info;
