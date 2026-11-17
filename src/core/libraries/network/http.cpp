@@ -35,6 +35,7 @@
 
 #if __has_include(<httplib.h>)
 #include <httplib.h>
+#include "shadnet/webapi_tls.h"
 #define ORBIS_HTTP_WITH_HTTPLIB 1
 #endif
 
@@ -876,7 +877,10 @@ static s32 RunRealHttpRequest(const SendRequestPlan& plan_in, HttpResponse& out_
                          plan.scheme, plan.host);
             }
             cli.enable_server_certificate_verification(verify_server);
-            if (config_disabled_verify) {
+            if (ShadNet::PinWebApiClient(cli, base_url)) {
+                // The shadNet WebAPI carries the player's bearer token: always verify it
+                // against the CrossCrease CA, whatever the game or disable_https says.
+            } else if (config_disabled_verify) {
                 LOG_INFO(Lib_Http, "{}://{}: server cert verification disabled by configuration",
                          plan.scheme, plan.host);
             } else if (game_disabled_verify) {

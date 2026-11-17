@@ -2,6 +2,20 @@
 
 Changes to CrossCrease NHL 17 releases. Versions follow [semantic versioning](https://semver.org/); the version source of truth is `tools/release/VERSION`. See [RELEASING.md](RELEASING.md) for how releases are built.
 
+## 0.4.3 — Encrypted game services
+
+- PSN WebAPI requests (profile, entitlements, sessions and invitations, which carry the
+  player's sign-in token) go to the server over HTTPS (`psn_webapi_tls_port`, 31319, in
+  `online\server_connection.json`). The emulator accepts only a certificate issued by the
+  CrossCrease CA in `online\generated\`, whatever the game asks for and even with
+  `Network.disable_https`. There is no fallback to plain HTTP.
+- Blaze (matchmaking, stats, EASHL, HUT) is encrypted too. That needs no runtime change: a
+  CrossCrease server 0.3.5 or newer tells the game to use TLS, and the game checks the server
+  against the CA in the trust patch every release already loads, so older runtimes get it as
+  well.
+- Needs a CrossCrease server 0.3.5 or newer. Older servers have no HTTPS WebAPI, so online
+  features that use it fail against them.
+
 ## 0.4.2 — Encrypted sign-in
 
 - Signing in to the CrossCrease server is encrypted (TLS). Before, the online ID, password and

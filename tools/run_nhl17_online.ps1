@@ -69,7 +69,12 @@ try {
     }
     $config.Network.shadnet_server = "${ServerAddress}:$identityPort"
     $config.Network | Add-Member -NotePropertyName shadnet_ca_certificate -NotePropertyValue $caCertificate -Force
-    $config.Network.shadnet_webapi_server = "http://${ServerAddress}:$($connection.psn_webapi_http_port)"
+    # The WebAPI (which carries the player's token) uses HTTPS against the same CA when offered.
+    if ($caCertificate -and $connection.psn_webapi_tls_port) {
+        $config.Network.shadnet_webapi_server = "https://${ServerAddress}:$($connection.psn_webapi_tls_port)"
+    } else {
+        $config.Network.shadnet_webapi_server = "http://${ServerAddress}:$($connection.psn_webapi_http_port)"
+    }
     $config | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath $configPath
     $users = Get-Content -LiteralPath $usersPath -Raw | ConvertFrom-Json
     $user = $users.Users.user | Where-Object { $_.player_index -eq 1 } | Select-Object -First 1

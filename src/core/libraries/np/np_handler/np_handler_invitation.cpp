@@ -12,6 +12,7 @@
 #include "core/libraries/np/np_handler/np_handler.h"
 #include "core/libraries/system/systemservice.h"
 #include "imgui/invitation_prompt_layer.h"
+#include "shadnet/webapi_tls.h"
 
 namespace Libraries::Np {
 
@@ -99,6 +100,7 @@ bool NpHandler::SendSessionInvitation(s32 user_id, const std::string& session_id
     const std::string content_type = "multipart/mixed; boundary=" + boundary;
 
     httplib::Client cli(base_url);
+    ShadNet::PinWebApiClient(cli, base_url);
     cli.set_connection_timeout(5);
     cli.set_read_timeout(10);
     const httplib::Headers headers = {{"Authorization", "Bearer " + token}};
