@@ -20,6 +20,16 @@ Changes to CrossCrease NHL 17 releases. Versions follow [semantic versioning](ht
 - Crash logs: an unhandled guest exception also logs the registers and the stack values that
   point into the guest module range, so the game call chain can be reconstructed.
 
+## 0.4.4 — Crash reports
+
+- Crash file for crash reports: when the emulator catches a crash (an unhandled exception or a
+  failed assertion), it writes `user\log\crash.txt` next to `shad_log.txt` with a few
+  `key=value` lines: `kind` (`exception` or `assert`), `code`, `address` (the exception address,
+  or `file:line` of the assertion), `time` and `version`. `run_nhl17_online.ps1` writes one with
+  `kind=exit` when the game ends with a non-zero exit code and the emulator wrote none. The
+  CrossCrease launcher (0.9.0 and newer) finds the file and offers to send a crash report to
+  the CrossCrease team. Nothing else changed since 0.4.3.
+
 ## 0.4.3 — Encrypted game services
 
 - PSN WebAPI requests (profile, entitlements, sessions and invitations, which carry the
