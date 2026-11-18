@@ -67,6 +67,20 @@ std::string PadPipe::HandleCommand(const std::string& line) {
     int pressed = -1;
     stream >> name >> pressed;
     std::ranges::transform(name, name.begin(), [](unsigned char c) { return std::tolower(c); });
+    if (name == "l2axis" || name == "r2axis") {
+        if (pressed < 0 || pressed > 255) {
+            return "ERR expected <l2axis|r2axis> <0-255>";
+        }
+        (*m_controllers)[0]->Axis(name == "l2axis" ? Axis::TriggerLeft : Axis::TriggerRight,
+                                  pressed, false);
+        return "OK";
+    }
+    if ((name == "l2button" || name == "r2button") && (pressed == 0 || pressed == 1)) {
+        (*m_controllers)[0]->Button(name == "l2button" ? OrbisPadButtonDataOffset::L2
+                                                       : OrbisPadButtonDataOffset::R2,
+                                    pressed == 1);
+        return "OK";
+    }
     if (pressed != 0 && pressed != 1) {
         return "ERR expected <button> <0|1>";
     }

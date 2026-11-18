@@ -689,10 +689,24 @@ ImageId TextureCache::FindImage(ImageDesc& desc, bool exact_fmt) {
             // Cannot reuse this image as we need the exact requested format.
             image_id = {};
         } else if (!image_resolved.info.resources.Contains(info.resources)) {
-            // The image was clearly picked up wrong.
-            FreeImage(image_id);
-            image_id = {};
-            LOG_WARNING(Render_Vulkan, "Image overlap resolve failed");
+            const bool keep_gpu_data = image_resolved.HasGpuValidData() &&
+                                       image_resolved.info.type == info.type &&
+                                       image_resolved.info.size == info.size;
+            LOG_WARNING(Render_Vulkan,
+                        "Image overlap resolve failed: {:#x} {}x{} levels {}->{} layers {}->{} "
+                        "format {}->{} gpu data {}",
+                        info.guest_address, info.size.width, info.size.height,
+                        image_resolved.info.resources.levels, info.resources.levels,
+                        image_resolved.info.resources.layers, info.resources.layers,
+                        vk::to_string(image_resolved.info.pixel_format),
+                        vk::to_string(info.pixel_format), keep_gpu_data);
+            if (keep_gpu_data) {
+                image_id = ExpandImage(info, image_id);
+            } else {
+                // The image was clearly picked up wrong.
+                FreeImage(image_id);
+                image_id = {};
+            }
         }
     }
     // Create and register a new image

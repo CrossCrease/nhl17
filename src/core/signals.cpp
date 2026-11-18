@@ -28,6 +28,48 @@ namespace Core {
 
 #if defined(_WIN32)
 
+// CrossCrease: an unhandled guest crash used to log only its code and address, which says
+// nothing about the game code that led there (a fault inside libc's memcpy, for instance).
+// Log the registers and every stack value that points into the low guest range where the
+// eboot and the system modules are loaded; matched against the "Loading module ... to 0x..."
+// lines this gives the guest call chain. The stack is read with ReadProcessMemory so that a
+// bad stack pointer cannot fault again inside the handler.
+static void LogUnhandledExceptionContext(const CONTEXT* ctx) noexcept {
+    if (ctx == nullptr) {
+        return;
+    }
+    LOG_CRITICAL(Debug,
+                 "Registers: rip={:#x} rsp={:#x} rbp={:#x} rax={:#x} rbx={:#x} rcx={:#x} "
+                 "rdx={:#x} rsi={:#x} rdi={:#x} r8={:#x} r9={:#x} r10={:#x} r11={:#x} "
+                 "r12={:#x} r13={:#x} r14={:#x} r15={:#x}",
+                 ctx->Rip, ctx->Rsp, ctx->Rbp, ctx->Rax, ctx->Rbx, ctx->Rcx, ctx->Rdx, ctx->Rsi,
+                 ctx->Rdi, ctx->R8, ctx->R9, ctx->R10, ctx->R11, ctx->R12, ctx->R13, ctx->R14,
+                 ctx->R15);
+    constexpr std::size_t StackWords = 2048;
+    constexpr u64 GuestCodeLow = 0x400000;
+    constexpr u64 GuestCodeHigh = 0x200000000;
+    std::string candidates;
+    int found = 0;
+    u64 words[64];
+    for (std::size_t base = 0; base < StackWords && found < 48; base += 64) {
+        SIZE_T read = 0;
+        if (!ReadProcessMemory(GetCurrentProcess(),
+                               reinterpret_cast<const void*>(ctx->Rsp + base * sizeof(u64)), words,
+                               sizeof(words), &read) ||
+            read != sizeof(words)) {
+            break;
+        }
+        for (std::size_t i = 0; i < 64 && found < 48; i++) {
+            if (words[i] >= GuestCodeLow && words[i] < GuestCodeHigh) {
+                candidates += fmt::format(" [rsp+{:#x}]={:#x}", (base + i) * sizeof(u64), words[i]);
+                found++;
+            }
+        }
+    }
+    LOG_CRITICAL(Debug, "Stack values in the guest module range:{}",
+                 candidates.empty() ? std::string(" none") : candidates);
+}
+
 static LONG WINAPI SignalHandler(EXCEPTION_POINTERS* pExp) noexcept {
     using namespace Libraries::Kernel;
     const auto* signals = Signals::Instance();
@@ -143,6 +185,7 @@ static LONG WINAPI SignalHandler(EXCEPTION_POINTERS* pExp) noexcept {
         use_static_windows_guest_red_zone_protection ? static_protection_exception : true;
     if (report_unhandled) {
         LOG_CRITICAL(Debug, "Unhandled Exception code {:#x} at {}", code, address);
+        LogUnhandledExceptionContext(pExp->ContextRecord);
         Common::Singleton<Core::Emulator>::Instance()->Shutdown();
     }
 

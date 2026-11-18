@@ -2,6 +2,24 @@
 
 Changes to CrossCrease NHL 17 releases. Versions follow [semantic versioning](https://semver.org/); the version source of truth is `tools/release/VERSION`. See [RELEASING.md](RELEASING.md) for how releases are built.
 
+## Unreleased
+
+- Graphics: textures the game paints at run time and later reads with more mip levels (for
+  example EASHL club jerseys) keep their content. Before, the texture cache threw the painted
+  image away, so some clients showed a club's jersey black with no trim or crest, and each
+  client could show different uniforms in the same match.
+- Pad pipe (developer tests): raw trigger commands `l2axis|r2axis <0-255>` (trigger value
+  only) and `l2button|r2button <0|1>` (digital bit only), next to `<button> <0|1>`.
+- Developer tests: `SHADPS4_LOCAL_IP` (opt-in environment variable) makes an emulator instance
+  report that address as its own. Several instances on one PC can then each use the game's
+  fixed P2P port, for example 127.0.0.1/.2/.3 with a server on loopback. Windows does not send
+  from a 127.x address to a LAN address, so all parts must be on loopback. Normal play is
+  unaffected.
+- Network capture (`SHADPS4_NET_CAPTURE_DIR`, developer only): also records `bind` (local
+  address and port) and the socket type in each `socket` event.
+- Crash logs: an unhandled guest exception also logs the registers and the stack values that
+  point into the guest module range, so the game call chain can be reconstructed.
+
 ## 0.4.3 — Encrypted game services
 
 - PSN WebAPI requests (profile, entitlements, sessions and invitations, which carry the

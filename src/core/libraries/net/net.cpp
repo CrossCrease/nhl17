@@ -692,8 +692,7 @@ s32 PS4_SYSV_ABI sceNetBandwidthControlSetPolicy() {
     return ORBIS_OK;
 }
 
-s32 PS4_SYSV_ABI sceNetBind(OrbisNetId s, const OrbisNetSockaddr* addr, u32 addrlen) {
-    LOG_INFO(Lib_Net, "s = {}, addr = {}", s, FormatSockaddr(addr, addrlen));
+static s32 sceNetBindImpl(OrbisNetId s, const OrbisNetSockaddr* addr, u32 addrlen) {
     Core::Net::SocketInfo info{};
     if (const auto r = Core::Net::SocketGetInfo(s, &info); r.error != Error::Ok) {
         return Return(r);
@@ -742,6 +741,13 @@ s32 PS4_SYSV_ABI sceNetBind(OrbisNetId s, const OrbisNetSockaddr* addr, u32 addr
         ApplyPendingMemberships(s);
     }
     return Return(r);
+}
+
+s32 PS4_SYSV_ABI sceNetBind(OrbisNetId s, const OrbisNetSockaddr* addr, u32 addrlen) {
+    LOG_INFO(Lib_Net, "s = {}, addr = {}", s, FormatSockaddr(addr, addrlen));
+    const s32 r = sceNetBindImpl(s, addr, addrlen);
+    GetNetCapture().Write("bind", s, r, 0, FormatSockaddr(addr, addrlen));
+    return r;
 }
 
 s32 PS4_SYSV_ABI sceNetClearDnsCache() {
@@ -2773,7 +2779,8 @@ OrbisNetId PS4_SYSV_ABI sceNetSocket(const char* name, s32 family, s32 type, s32
     const OrbisNetId r = sceNetSocketImpl(name, family, type, protocol);
     LOG_INFO(Lib_Net, "'{}' family {} {} protocol {} -> {}", name != nullptr ? name : "", family,
              SocketTypeName(type), protocol, r >= 0 ? std::to_string(r) : ErrorCodeName(r));
-    GetNetCapture().Write("socket", r, r, 0, name != nullptr ? name : "");
+    GetNetCapture().Write("socket", r, r, 0,
+                          fmt::format("{} {}", name != nullptr ? name : "", SocketTypeName(type)));
     return r;
 }
 

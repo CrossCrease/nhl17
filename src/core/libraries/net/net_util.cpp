@@ -31,6 +31,7 @@ typedef int net_socket;
 #include <sstream>
 #endif
 
+#include <cstdlib>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -348,6 +349,13 @@ u32 NetUtilInternal::GetNatType() const {
 
 bool NetUtilInternal::RetrieveIp() {
     std::scoped_lock lock{m_mutex};
+
+    // Opt-in for several emulator instances on one host: each reports its own local address
+    // (e.g. 127.0.0.2), so the games' fixed P2P ports do not collide.
+    if (const char* forced = std::getenv("SHADPS4_LOCAL_IP"); forced && *forced) {
+        ip = forced;
+        return true;
+    }
 
     auto sockfd = socket(AF_INET, SOCK_STREAM, 0);
     if (sockfd == -1) {
