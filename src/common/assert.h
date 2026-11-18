@@ -13,6 +13,7 @@
 
 void assert_fail_impl();
 [[noreturn]] void unreachable_impl();
+void assert_fail_location(const char* file, int line);
 
 #ifdef _MSC_VER
 #define SHAD_NO_INLINE __declspec(noinline)
@@ -27,6 +28,7 @@ SHAD_NO_INLINE void AssertFail(const char* file, int line, const char* func,
                                fmt::format_string<Args...> format, Args... args) {
     Common::Log::VLog(Common::Log::Class::Debug, Common::Log::Level::Critical, file, line, func,
                       format, fmt::make_format_args(args...));
+    assert_fail_location(file, line);
     assert_fail_impl();
 }
 
@@ -35,6 +37,7 @@ template <typename... Args>
                                                  fmt::format_string<Args...> format, Args... args) {
     Common::Log::VLog(Common::Log::Class::Debug, Common::Log::Level::Critical, file, line, func,
                       format, fmt::make_format_args(args...));
+    assert_fail_location(file, line);
     unreachable_impl();
 }
 
