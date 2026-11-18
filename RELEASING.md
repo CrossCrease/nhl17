@@ -14,6 +14,10 @@ CrossCrease players never build this project. The CrossCrease launcher downloads
 
 Packages are built from an allowlist. The script never includes game files, `game-UPDATE`, console firmware, `keys.json`, saves, caches, logs, or the developer's `runtime\user` folder. It refuses to package if any of the online files contains a PEM private key or if the trust manifest reports one.
 
+## Branches
+
+`main` is always releasable: released work, fixes for the public beta, and finished features. Releases are built and tagged from `main`. Unfinished EASHL work lives on `eashl` and is merged into `main` once a piece is finished and tested in a match; `main` is merged into `eashl` after every release or fix (merge, never rebase or force-push a published branch).
+
 ## Steps
 
 1. Build the runtime: `powershell -NoProfile -ExecutionPolicy Bypass -File tools\build_windows.ps1`, then copy the resulting `shadPS4.exe` into `runtime\` as usual.
