@@ -92,7 +92,23 @@ try {
         -AllowMultipleInstances:$AllowMultipleInstances
     Remove-Item Env:\SHADPS4_SHADNET_PASSWORD -ErrorAction SilentlyContinue
     $Password = ''
+    $gameProcess = Get-Process -Id $process.ProcessId -ErrorAction SilentlyContinue
+    # Reading Handle keeps the process handle open, so the exit code stays readable after it ends.
+    if ($gameProcess) { $null = $gameProcess.Handle }
     Wait-Process -Id $process.ProcessId
+    # The emulator writes user\log\crash.txt itself when it catches a crash. For a crash it cannot
+    # catch, write one from the exit code so the launcher can still offer to report it.
+    if ($gameProcess) {
+        $gameProcess.WaitForExit()
+        $crashFile = Join-Path $userPath 'log\crash.txt'
+        $caught = (Test-Path -LiteralPath $crashFile) -and ((Get-Item -LiteralPath $crashFile).LastWriteTime -ge $gameProcess.StartTime)
+        if ($gameProcess.ExitCode -ne 0 -and -not $caught) {
+            $lines = 'format=1', 'kind=exit', ('code=0x{0:x8}' -f $gameProcess.ExitCode), 'address=',
+                ('time=' + [DateTime]::UtcNow.ToString('yyyy-MM-ddTHH:mm:ssZ')), 'log=shad_log.txt'
+            New-Item -ItemType Directory -Path (Split-Path -Parent $crashFile) -Force | Out-Null
+            [IO.File]::WriteAllText($crashFile, ($lines -join "`n") + "`n")
+        }
+    }
 } finally {
     Remove-Item Env:\SHADPS4_SHADNET_PASSWORD -ErrorAction SilentlyContinue
     Copy-Item -LiteralPath $configBackup -Destination $configPath -Force
