@@ -16,7 +16,7 @@ Packages are built from an allowlist. The script never includes game files, `gam
 
 ## Branches
 
-`main` is always releasable: released work, fixes for the public beta, and finished features. Releases are built and tagged from `main`. Unfinished EASHL work lives on `eashl` and is merged into `main` once a piece is finished and tested in a match; `main` is merged into `eashl` after every release or fix (merge, never rebase or force-push a published branch).
+`main` is always releasable: released work, fixes for the public alpha, and finished features. Releases are built and tagged from `main`. Unfinished EASHL work lives on `eashl` and is merged into `main` once a piece is finished and tested in a match; `main` is merged into `eashl` after every release or fix (merge, never rebase or force-push a published branch).
 
 ## Steps
 
