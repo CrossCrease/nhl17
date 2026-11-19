@@ -24,4 +24,27 @@
       <Line Type="bytes" Address="0x0166b930" Value="e92bb7faff9090909090909090"/>
     </PatchList>
   </Metadata>
+  <!--
+    Online Team Play hub tile: the hub script (ui/features/playonline/vvms/otpversus/otpversus.lua
+    in databigs/boot.big) draws the Ranked OTP Quick Match tile only from the data source's initial
+    data and ignores later updates (OnNewDataFromDataSource), but that service is deferred, so its
+    data always arrives as an update and the tile stayed empty. The Online Versus script draws both.
+    The first line routes the quick-match update to OnQuickMatchInitialData, as Online Versus does;
+    the next two blank two comments (same length) so the recompressed chunk fits its old space.
+    The tile is drawn only after the player's avatar request answers. The OTP services
+    script (same archive, record 0x12d6890) ignores a failed request, so a player
+    without a downloadable avatar never got the tile; Online Versus calls back with no avatar and
+    shows the placeholder. The fourth line does the same for OTP; the fifth blanks a comment.
+    Type chunkzip_text is a CrossCrease addition: the runtime rebuilds the record from the player's
+    own boot.big when it is first read; no game data is in this file.
+  -->
+  <Metadata Title="NHL 17" Name="CrossCrease OTP hub tile fix" Author="CrossCrease" PatchVer="1.0" AppVer="01.08" AppElf="eboot.bin" isEnabled="true">
+    <PatchList>
+      <Line Type="chunkzip_text" File="databigs/boot.big" Offset="0x012dca00" Find="OnNewDataFromDataSource = function( reference, data ) o:OnNewDataFromDataSource( data ) end" Replace="OnNewDataFromDataSource = function( reference, data ) o:OnQuickMatchInitialData( data ) end"/>
+      <Line Type="chunkzip_text" File="databigs/boot.big" Offset="0x012dca00" Find="-- clamp the level value at 1 as this is used for a progress bar that expects values from 0-1" Replace="---------------------------------------------------------------------------------------------"/>
+      <Line Type="chunkzip_text" File="databigs/boot.big" Offset="0x012dca00" Find="-- this means that any profile with 100+ games played will display a full progress bar" Replace="--------------------------------------------------------------------------------------"/>
+      <Line Type="chunkzip_text" File="databigs/boot.big" Offset="0x012d6890" Find="function (errorCode, errorSummary) return true end)" Replace="function(e,s)  callback(nil,false) return true end)"/>
+      <Line Type="chunkzip_text" File="databigs/boot.big" Offset="0x012d6890" Find="--In case this call fails (As disconnected or logged out) turn off the datawatch" Replace="--------------------------------------------------------------------------------"/>
+    </PatchList>
+  </Metadata>
 </Patch>

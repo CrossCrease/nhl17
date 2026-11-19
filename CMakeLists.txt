@@ -951,6 +951,8 @@ set(CORE src/core/aerolib/stubs.cpp
          src/core/file_format/trp.h
          src/core/file_format/npbind.cpp
          src/core/file_format/npbind.h
+         src/core/file_sys/file_patches.cpp
+         src/core/file_sys/file_patches.h
          src/core/file_sys/fs.cpp
          src/core/file_sys/fs.h
          src/core/file_sys/ifile.cpp

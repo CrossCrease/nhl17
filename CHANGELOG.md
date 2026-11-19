@@ -2,6 +2,20 @@
 
 Changes to CrossCrease NHL 17 releases. Versions follow [semantic versioning](https://semver.org/); the version source of truth is `tools/release/VERSION`. See [RELEASING.md](RELEASING.md) for how releases are built.
 
+## 0.4.5 — Online Team Play hub stats
+
+- Online Team Play: the hub's Ranked OTP Quick Match tile shows the player's games, rank and
+  goals-assists-points (with the placeholder avatar, as on the Online Versus hub). The
+  game's own OTP hub scripts ignored the stats once they arrived and waited forever for an
+  avatar that cannot be downloaded, so the tile stayed empty. The compatibility patch
+  (update 1.08) corrects those two script lines in `boot.big` the way the Online Versus hub
+  already does it, as the game reads the file. The game files on disk are not changed.
+  Needs a CrossCrease NHL 17 server with OTP stats (server 0.3.7 or newer).
+- Patches: new patch line type `chunkzip_text` (`File`, `Offset`, `Find`, `Replace`). It
+  replaces text of the same length inside a compressed record of a game file while the game
+  reads it. The record is rebuilt from the player's own file, so no game data ships with the patch.
+- Nothing else changed since 0.4.4.
+
 ## 0.4.4 — Crash reports
 
 - Crash file for crash reports: when the emulator catches a crash (an unhandled exception or a
