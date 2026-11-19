@@ -4,6 +4,15 @@ Changes to CrossCrease NHL 17 releases. Versions follow [semantic versioning](ht
 
 ## Unreleased
 
+- Online Team Play: the hub's Ranked OTP Quick Match tile shows the player's games, rank and
+  goals-assists-points (with the placeholder avatar, as on the Online Versus hub). The
+  game's own OTP hub scripts ignored the stats once they arrived and waited forever for an
+  avatar that cannot be downloaded, so the tile stayed empty. The compatibility patch
+  (update 1.08) corrects those two script lines in `boot.big` the way the Online Versus hub
+  already does it, as the game reads the file. The game files on disk are not changed.
+- Patches: new patch line type `chunkzip_text` (`File`, `Offset`, `Find`, `Replace`). It
+  replaces text of the same length inside a compressed record of a game file while the game
+  reads it. The record is rebuilt from the player's own file, so no game data ships with the patch.
 - Graphics: textures the game paints at run time and later reads with more mip levels (for
   example EASHL club jerseys) keep their content. Before, the texture cache threw the painted
   image away, so some clients showed a club's jersey black with no trim or crest, and each

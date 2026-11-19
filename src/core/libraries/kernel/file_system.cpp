@@ -35,6 +35,7 @@
 #include "core/file_sys/devices/zero_device.h"
 #include "core/file_sys/directories/normal_directory.h"
 #include "core/file_sys/directories/pfs_directory.h"
+#include "core/file_sys/file_patches.h"
 #include "core/file_sys/fs.h"
 #include "core/libraries/kernel/file_system.h"
 #include "core/libraries/kernel/orbis_error.h"
@@ -471,9 +472,13 @@ s64 ReadFile(Core::FileSys::File* file, void* buf, u64 nbytes) {
     if (file_buf.capacity() < nbytes) {
         file_buf.reserve(nbytes);
     }
+    const s64 position = file->Tell();
     s64 bytes = file->Read(file_buf.data(), nbytes);
     if (bytes < 0) {
         return bytes;
+    }
+    if (position >= 0) {
+        Core::FileSys::FilePatches::Apply(file->m_host_name, position, file_buf.data(), bytes);
     }
     std::memcpy(buf, file_buf.data(), bytes);
     return bytes;

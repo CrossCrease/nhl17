@@ -12,6 +12,7 @@
 #include "common/logging/log.h"
 #include "common/path_util.h"
 #include "core/emulator_state.h"
+#include "core/file_sys/file_patches.h"
 #include "core/file_format/psf.h"
 #include "memory_patcher.h"
 
@@ -158,6 +159,15 @@ void ApplyPatchesFromXML(std::filesystem::path path) {
                         std::string type = patchLineIt->attribute("Type").value();
                         if (!versionMatches && type != "mask" && type != "mask_jump32")
                             continue;
+
+                        if (type == "chunkzip_text") {
+                            Core::FileSys::FilePatches::AddChunkzipText(
+                                patchLineIt->attribute("File").value(),
+                                std::stoull(patchLineIt->attribute("Offset").value(), nullptr, 0),
+                                patchLineIt->attribute("Find").value(),
+                                patchLineIt->attribute("Replace").value());
+                            continue;
+                        }
 
                         std::string address = patchLineIt->attribute("Address").value();
                         std::string patchValue = patchLineIt->attribute("Value").value();
