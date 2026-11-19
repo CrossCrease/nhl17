@@ -4,6 +4,14 @@ Changes to CrossCrease NHL 17 releases. Versions follow [semantic versioning](ht
 
 ## Unreleased
 
+- Linux (Proton or Wine): the runtime package has `tools\crosscrease-nhl17.exe`, which starts
+  the game online (`play`) and renames an online ID (`rename`) exactly like
+  `run_nhl17_online.ps1` and `rename_online_id.ps1`, without Windows PowerShell. Proton and
+  Wine do not provide PowerShell, so with the scripts a window flashed and the game never
+  started. Each start writes `logs\online-<time>\launch.log` in the player's data folder
+  (with the Wine version when there is one), and a failed start shows a message naming it.
+  The CrossCrease launcher runs it from 0.9.1; older launchers keep using the scripts, which
+  are still included.
 - Graphics: textures the game paints at run time and later reads with more mip levels (for
   example EASHL club jerseys) keep their content. Before, the texture cache threw the painted
   image away, so some clients showed a club's jersey black with no trim or crest, and each
