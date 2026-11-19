@@ -356,6 +356,12 @@ bool IOFile::Flush() const {
         return false;
     }
 
+    // Read-only streams have nothing to flush, and Wine's fflush drops their read buffer
+    // without moving the file position back, so the next read would skip ahead.
+    if (file_access_mode == FileAccessMode::Read) {
+        return true;
+    }
+
     errno = 0;
 
 #ifdef _WIN32
@@ -462,7 +468,7 @@ u64 IOFile::GetSize() const {
     }
 
     // Flush any unwritten buffered data into the file prior to retrieving the file size.
-    std::fflush(file);
+    Flush();
 
     std::error_code ec;
 

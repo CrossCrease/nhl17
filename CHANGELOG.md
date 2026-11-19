@@ -2,6 +2,14 @@
 
 Changes to CrossCrease NHL 17 releases. Versions follow [semantic versioning](https://semver.org/); the version source of truth is `tools/release/VERSION`. See [RELEASING.md](RELEASING.md) for how releases are built.
 
+## 0.4.7 — Linux startup crash fixed
+
+- Linux (Proton or Wine): NHL 17 no longer crashes a few seconds after the window opens
+  (report #1). Wine's C runtime dropped the read buffer of game files whenever the emulator
+  checked a file's size, so the next read skipped ahead, the game misread an archive table
+  and never mounted `boot.big`. Read-only files are no longer flushed.
+- The online connection files are the same as in 0.4.6.
+
 ## 0.4.6 — Starts under Linux (Proton/Wine)
 
 - Linux (Proton or Wine): the runtime package has `tools\crosscrease-nhl17.exe`, which starts
