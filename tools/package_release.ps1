@@ -82,6 +82,9 @@ $runtimeFiles = 'shadPS4.exe', 'msvcp140.dll', 'msvcp140_atomic_wait.dll', 'vcru
 Copy-Listed (Resolve-Path -LiteralPath $RuntimeDirectory).Path $runtimeFiles (Join-Path $runtimeStage 'runtime')
 Copy-Listed (Join-Path $PSScriptRoot 'release\defaults\user') 'config.json', 'users.json' (Join-Path $runtimeStage 'runtime\defaults\user')
 Copy-Listed $PSScriptRoot 'run_nhl17.ps1', 'run_nhl17_online.ps1', 'rename_online_id.ps1' (Join-Path $runtimeStage 'tools')
+# The launcher (0.9.1+) runs crosscrease-nhl17.exe, which needs no PowerShell (Wine/Proton); older
+# launchers still run the scripts above.
+& (Join-Path $PSScriptRoot 'build_start_program.ps1') -Out (Join-Path $runtimeStage 'tools\crosscrease-nhl17.exe') | Out-Null
 Copy-Listed (Join-Path $root 'patches') 'nhl17-compat.xml' (Join-Path $runtimeStage 'patches')
 Copy-Listed $root 'LICENSE' $runtimeStage
 Copy-Item -LiteralPath (Join-Path $root 'LICENSES') -Destination (Join-Path $runtimeStage 'LICENSES') -Recurse
