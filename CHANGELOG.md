@@ -4,10 +4,6 @@ Changes to CrossCrease NHL 17 releases. Versions follow [semantic versioning](ht
 
 ## Unreleased
 
-- Linux (Proton or Wine): NHL 17 no longer crashes a few seconds after the window opens
-  (report #1). Wine's C runtime dropped the read buffer of game files whenever the emulator
-  checked a file's size, so the next read skipped ahead, the game misread an archive table
-  and never mounted `boot.big`. Read-only files are no longer flushed.
 - Graphics: textures the game paints at run time and later reads with more mip levels (for
   example EASHL club jerseys) keep their content. Before, the texture cache threw the painted
   image away, so some clients showed a club's jersey black with no trim or crest, and each
@@ -23,6 +19,14 @@ Changes to CrossCrease NHL 17 releases. Versions follow [semantic versioning](ht
   address and port) and the socket type in each `socket` event.
 - Crash logs: an unhandled guest exception also logs the registers and the stack values that
   point into the guest module range, so the game call chain can be reconstructed.
+
+## 0.4.7 — Linux startup crash fixed
+
+- Linux (Proton or Wine): NHL 17 no longer crashes a few seconds after the window opens
+  (report #1). Wine's C runtime dropped the read buffer of game files whenever the emulator
+  checked a file's size, so the next read skipped ahead, the game misread an archive table
+  and never mounted `boot.big`. Read-only files are no longer flushed.
+- The online connection files are the same as in 0.4.6.
 
 ## 0.4.6 — Starts under Linux (Proton/Wine)
 
