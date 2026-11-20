@@ -2,6 +2,18 @@
 
 Changes to CrossCrease NHL 17 releases. Versions follow [semantic versioning](https://semver.org/); the version source of truth is `tools/release/VERSION`. See [RELEASING.md](RELEASING.md) for how releases are built.
 
+## Unreleased
+
+- Graphics options: `-Resolution 900p|1080p|1440p` and `-FrameRate 60|120` for
+  `crosscrease-nhl17.exe play`, `tools/run_nhl17_online.ps1` and `tools/run_nhl17.ps1` (the
+  launcher shows them in Game settings). NHL 17 draws its picture at 1600x900 and scales it up;
+  the new in-memory patches `patches/nhl17-resolution-1080p.xml` and `-1440p.xml` make it draw at
+  1920x1080 or 2560x1440 (1440p also makes the game's output 1440p). They work with the base game
+  (1.00) and the update (1.08). 120 sets the emulated screen refresh to 120 Hz: offline gameplay
+  then runs at up to 120 fps and menus at 60. Online matches stay near 60 fps, because the game
+  keeps every player in a match in step; mixing 60 and 120 players in one match works. Higher
+  settings need a faster graphics card; the defaults (900p, 60) are unchanged.
+
 ## 0.4.8 — Faster on slower graphics cards
 
 - Performance: gameplay no longer drops to 30 fps on PCs whose graphics card is the limit

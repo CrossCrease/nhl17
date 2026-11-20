@@ -1,0 +1,34 @@
+<?xml version="1.0"?>
+<!--
+  CrossCrease render resolution patch for NHL 17: the game picture at 1920x1080 instead of 1600x900.
+
+  NHL 17 renders its 3D scene at 1600x900 and scales it to a 1920x1080 picture. The renderer setup
+  stores the scene size twice: as two immediate values (mov [r12+0x5c], 1600 / mov [r12+0x60], 900)
+  and in a constant table {scene width, scene height, output width, output height} that it copies into
+  the device settings. This patch changes both to 1920x1080; the output stays 1920x1080. Every scene
+  buffer (colour, depth, HDR and the others) then has the new size. Applied in memory only.
+
+  Addresses use the shadPS4 convention (ELF virtual address + 0x400000).
+    Base game 1.00: immediates at vaddr 0x136526a / 0x1365273, table at vaddr 0x32db640.
+    Update 1.08:    immediates at vaddr 0x13c31ba / 0x13c31c3, table at vaddr 0x3376700.
+-->
+<Patch>
+  <TitleID>
+    <ID>CUSA04326</ID>
+    <ID>CUSA04330</ID>
+  </TitleID>
+  <Metadata Title="NHL 17" Name="CrossCrease render resolution 1080p (1.00)" Author="CrossCrease" PatchVer="1.0" AppVer="01.00" AppElf="eboot.bin" isEnabled="true">
+    <PatchList>
+      <Line Type="bytes" Address="0x0176526a" Value="80070000"/>
+      <Line Type="bytes" Address="0x01765273" Value="38040000"/>
+      <Line Type="bytes" Address="0x036db640" Value="8007000038040000"/>
+    </PatchList>
+  </Metadata>
+  <Metadata Title="NHL 17" Name="CrossCrease render resolution 1080p (1.08)" Author="CrossCrease" PatchVer="1.0" AppVer="01.08" AppElf="eboot.bin" isEnabled="true">
+    <PatchList>
+      <Line Type="bytes" Address="0x017c31ba" Value="80070000"/>
+      <Line Type="bytes" Address="0x017c31c3" Value="38040000"/>
+      <Line Type="bytes" Address="0x03776700" Value="8007000038040000"/>
+    </PatchList>
+  </Metadata>
+</Patch>

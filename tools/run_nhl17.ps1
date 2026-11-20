@@ -15,7 +15,11 @@ param(
     # shadPS4 uses <working directory>\user, so the game starts from this folder when it is set.
     [string]$DataDirectory = '',
     [switch]$AllowMultipleInstances,
-    [switch]$BaseOnly
+    [switch]$BaseOnly,
+    # Render resolution: 900p is the game's own (1600x900 scaled to 1080p); 1080p and 1440p patch it.
+    [ValidateSet('900p', '1080p', '1440p')][string]$Resolution = '900p',
+    # Emulated display refresh. 120 lets offline gameplay run at 120 fps; online matches stay near 60.
+    [ValidateSet(60, 120)][int]$FrameRate = 60
 )
 $ErrorActionPreference = 'Stop'
 $runtimePath = (Resolve-Path -LiteralPath $RuntimeDirectory).Path
@@ -68,17 +72,22 @@ New-Item -ItemType Directory -Path $artifacts -Force | Out-Null
 $configPath = Join-Path $userPath 'config.json'
 $config = Get-Content -LiteralPath $configPath -Raw | ConvertFrom-Json
 $config.GPU.readback_linear_images_enabled = $true
+$config.GPU.vblank_frequency = $FrameRate
 $config.Vulkan.vkvalidation_enabled = [bool]$Validation
 $config.Vulkan.vkvalidation_sync_enabled = [bool]$Validation
 $config.Log.filter = if ($LogFilter) { $LogFilter } elseif ($ProfileScopes) { '*:warning Lib.VideoOut:info Render:info Render.Vulkan:info' } elseif ($FrameStats) { '*:warning Lib.VideoOut:info' } else { '*:warning' }
 $config | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath $configPath
 $arguments = '--show-fps -g "' + $gamePath + '"'
 if ($BaseOnly) { $arguments += ' --ignore-game-patch' }
-# shadPS4 takes one patch file. The CrossCrease compatibility patch (update 1.08 only) is combined
-# with the requested patch file, for example the server trust patch.
+# shadPS4 takes one patch file. The CrossCrease compatibility patch (update 1.08 only) and the
+# resolution patch (1.00 and 1.08) are combined with the requested patch file, for example the
+# server trust patch.
 $patchFiles = @()
 $compatibilityPatch = Join-Path $PSScriptRoot '..\patches\nhl17-compat.xml'
 if (-not $BaseOnly -and (Test-Path -LiteralPath $compatibilityPatch)) { $patchFiles += (Resolve-Path -LiteralPath $compatibilityPatch).Path }
+if ($Resolution -ne '900p') {
+    $patchFiles += (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot "..\patches\nhl17-resolution-$Resolution.xml")).Path
+}
 if ($PatchFile) { $patchFiles += (Resolve-Path -LiteralPath $PatchFile).Path }
 $resolvedPatchFile = ''
 if ($patchFiles.Count -eq 1) {
@@ -145,6 +154,7 @@ try {
         LinearImageReadbacks = $config.GPU.readback_linear_images_enabled
         FastShaderMath = $config.GPU.fast_shader_math
         VblankFrequency = $config.GPU.vblank_frequency
+        Resolution = $Resolution
         InternalWidth = $config.GPU.internal_screen_width
         InternalHeight = $config.GPU.internal_screen_height
         PresentMode = $config.GPU.present_mode

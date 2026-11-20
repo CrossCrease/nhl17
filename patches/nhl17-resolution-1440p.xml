@@ -1,0 +1,35 @@
+<?xml version="1.0"?>
+<!--
+  CrossCrease render resolution patch for NHL 17: game picture and output at 2560x1440.
+
+  Like nhl17-resolution-1080p.xml, but also raises the output size: the constant table
+  {scene width, scene height, output width, output height} and the next table {format, output width,
+  output height, ...} get 2560x1440, and the game then creates 2560x1440 display buffers itself
+  (sceVideoOutSetBufferAttribute). The HUD and menus scale with it. Applied in memory only.
+
+  Addresses use the shadPS4 convention (ELF virtual address + 0x400000).
+    Base game 1.00: immediates at vaddr 0x136526a / 0x1365273, tables at vaddr 0x32db640 / 0x32db654.
+    Update 1.08:    immediates at vaddr 0x13c31ba / 0x13c31c3, tables at vaddr 0x3376700 / 0x3376714.
+-->
+<Patch>
+  <TitleID>
+    <ID>CUSA04326</ID>
+    <ID>CUSA04330</ID>
+  </TitleID>
+  <Metadata Title="NHL 17" Name="CrossCrease render resolution 1440p (1.00)" Author="CrossCrease" PatchVer="1.0" AppVer="01.00" AppElf="eboot.bin" isEnabled="true">
+    <PatchList>
+      <Line Type="bytes" Address="0x0176526a" Value="000a0000"/>
+      <Line Type="bytes" Address="0x01765273" Value="a0050000"/>
+      <Line Type="bytes" Address="0x036db640" Value="000a0000a0050000000a0000a0050000"/>
+      <Line Type="bytes" Address="0x036db654" Value="000a0000a0050000"/>
+    </PatchList>
+  </Metadata>
+  <Metadata Title="NHL 17" Name="CrossCrease render resolution 1440p (1.08)" Author="CrossCrease" PatchVer="1.0" AppVer="01.08" AppElf="eboot.bin" isEnabled="true">
+    <PatchList>
+      <Line Type="bytes" Address="0x017c31ba" Value="000a0000"/>
+      <Line Type="bytes" Address="0x017c31c3" Value="a0050000"/>
+      <Line Type="bytes" Address="0x03776700" Value="000a0000a0050000000a0000a0050000"/>
+      <Line Type="bytes" Address="0x03776714" Value="000a0000a0050000"/>
+    </PatchList>
+  </Metadata>
+</Patch>

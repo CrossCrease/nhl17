@@ -2,6 +2,7 @@
 // launcher runs it for Play and for renaming an online ID:
 //
 //   crosscrease-nhl17 play -Game <eboot.bin> -DataDirectory <folder> [-ServerAddress <host>] [-OnlineId <id>] [-BaseOnly]
+//                          [-Resolution 900p|1080p|1440p] [-FrameRate 60|120]
 //   crosscrease-nhl17 rename -OnlineId <id> -NewOnlineId <id> [-ServerAddress <host>]
 //
 // "play" does what tools\run_nhl17_online.ps1 (with run_nhl17.ps1) does for a player's data folder, and
@@ -51,6 +52,7 @@ namespace CrossCrease.Nhl17
             if (command == "rename") return Rename(args);
             if (command == "play") return Play(args);
             const string usage = "Usage:\n  crosscrease-nhl17 play -Game <eboot.bin> -DataDirectory <folder> [-ServerAddress <host>] [-OnlineId <id>] [-BaseOnly]\n" +
+                "                         [-Resolution 900p|1080p|1440p] [-FrameRate 60|120]\n" +
                 "  crosscrease-nhl17 rename -OnlineId <id> -NewOnlineId <id> [-ServerAddress <host>]";
             Console.Error.WriteLine(usage);
             return 2;
@@ -190,6 +192,12 @@ namespace CrossCrease.Nhl17
         {
             bool baseOnly = options.ContainsKey("BaseOnly");
             bool allowMultipleInstances = options.ContainsKey("AllowMultipleInstances");
+            // Graphics options, as in run_nhl17.ps1: 900p is the game's own render resolution.
+            string resolution = (Option(options, "Resolution") ?? "900p").ToLowerInvariant();
+            if (Array.IndexOf(new[] { "900p", "1080p", "1440p" }, resolution) < 0) throw new Failure("Invalid resolution: " + resolution + " (use 900p, 1080p or 1440p).");
+            string frameRateText = Option(options, "FrameRate") ?? "60";
+            if (frameRateText != "60" && frameRateText != "120") throw new Failure("Invalid frame rate: " + frameRateText + " (use 60 or 120).");
+            int frameRate = int.Parse(frameRateText, CultureInfo.InvariantCulture);
             string password = TakePassword(options);
 
             string connectionPath = PackagePath(options, "ConnectionDirectory", "online");
@@ -209,7 +217,8 @@ namespace CrossCrease.Nhl17
             if (!File.Exists(exe)) throw new Failure("The emulator is missing: " + exe + ". Reinstall the NHL 17 runtime from the launcher.");
             string gamePath = Path.GetFullPath(game);
             if (!File.Exists(gamePath) && !Directory.Exists(gamePath)) throw new Failure("The game was not found: " + gamePath);
-            Log("Game " + gamePath + (baseOnly ? " (base game)" : "") + "; data " + dataPath + "; server " + server + "; online ID " + onlineId);
+            Log("Game " + gamePath + (baseOnly ? " (base game)" : "") + "; data " + dataPath + "; server " + server + "; online ID " + onlineId +
+                "; resolution " + resolution + "; frame rate " + frameRate);
 
             foreach (var running in Process.GetProcessesByName("shadPS4"))
             {
@@ -272,6 +281,7 @@ namespace CrossCrease.Nhl17
                     ? "https://" + server + ":" + Text(connection, "psn_webapi_tls_port")
                     : "http://" + server + ":" + Text(connection, "psn_webapi_http_port");
                 Section(config, "GPU")["readback_linear_images_enabled"] = true;
+                Section(config, "GPU")["vblank_frequency"] = frameRate;
                 Section(config, "Vulkan")["vkvalidation_enabled"] = false;
                 Section(config, "Vulkan")["vkvalidation_sync_enabled"] = false;
                 Section(config, "Log")["filter"] = "*:warning";
@@ -292,7 +302,7 @@ namespace CrossCrease.Nhl17
 
                 string arguments = "--show-fps -g \"" + gamePath + "\"";
                 if (baseOnly) arguments += " --ignore-game-patch";
-                string patchFile = CombinePatches(baseOnly, trustPatch, artifacts, "online");
+                string patchFile = CombinePatches(baseOnly, resolution, trustPatch, artifacts, "online");
                 if (patchFile != null) arguments += " -p \"" + patchFile + "\"";
 
                 var start = new ProcessStartInfo(exe, arguments)
@@ -325,7 +335,7 @@ namespace CrossCrease.Nhl17
                         Pump(process.StandardError.BaseStream, Path.Combine(artifacts, "online.stderr.log"))
                     };
                     File.WriteAllText(Path.Combine(artifacts, "online.pid"), process.Id.ToString(CultureInfo.InvariantCulture) + "\r\n");
-                    WriteRunInfo(Path.Combine(artifacts, "online.run.json"), process.Id, started, exe, gamePath, arguments, config, hostOverrides, patchFile);
+                    WriteRunInfo(Path.Combine(artifacts, "online.run.json"), process.Id, started, exe, gamePath, arguments, config, hostOverrides, patchFile, resolution);
                     Log("Game process " + process.Id + " started; waiting for it to close.");
                     process.WaitForExit();
                     foreach (var pump in pumps) pump.Join(5000);
@@ -385,13 +395,20 @@ namespace CrossCrease.Nhl17
             foreach (var folder in Directory.GetDirectories(source)) CopyDirectory(folder, Path.Combine(target, Path.GetFileName(folder)));
         }
 
-        // shadPS4 takes one patch file. The CrossCrease compatibility patch (update 1.08 only) is combined
-        // with the server trust patch.
-        static string CombinePatches(bool baseOnly, string trustPatch, string artifacts, string label)
+        // shadPS4 takes one patch file. The CrossCrease compatibility patch (update 1.08 only) and the
+        // resolution patch (1.00 and 1.08) are combined with the server trust patch.
+        static string CombinePatches(bool baseOnly, string resolution, string trustPatch, string artifacts, string label)
         {
             var files = new List<string>();
-            string compatibility = Path.GetFullPath(Path.Combine(ToolsDirectory, "..", "patches", "nhl17-compat.xml"));
+            string patches = Path.Combine(ToolsDirectory, "..", "patches");
+            string compatibility = Path.GetFullPath(Path.Combine(patches, "nhl17-compat.xml"));
             if (!baseOnly && File.Exists(compatibility)) files.Add(compatibility);
+            if (resolution != "900p")
+            {
+                string resolutionPatch = Path.GetFullPath(Path.Combine(patches, "nhl17-resolution-" + resolution + ".xml"));
+                if (!File.Exists(resolutionPatch)) throw new Failure("The resolution patch is missing: " + resolutionPatch + ". Reinstall the NHL 17 runtime from the launcher.");
+                files.Add(resolutionPatch);
+            }
             files.Add(Path.GetFullPath(trustPatch));
             if (files.Count == 1) return files[0];
             var combined = new XmlDocument();
@@ -420,7 +437,7 @@ namespace CrossCrease.Nhl17
         }
 
         static void WriteRunInfo(string path, int processId, DateTime started, string exe, string gamePath, string arguments,
-            Dictionary<string, object> config, string hostOverrides, string patchFile)
+            Dictionary<string, object> config, string hostOverrides, string patchFile, string resolution)
         {
             string hash;
             using (var sha = SHA256.Create())
@@ -448,6 +465,7 @@ namespace CrossCrease.Nhl17
             }
             info["NetworkCaptureDirectory"] = null;
             info["NetworkHostOverridesJson"] = hostOverrides;
+            info["Resolution"] = resolution;
             info["PatchFile"] = patchFile ?? "";
             info["StartProgram"] = "crosscrease-nhl17.exe";
             info["Wine"] = WineVersion();

@@ -70,8 +70,9 @@ The online\ folder holds the public client files for connecting to a CrossCrease
 address, the server's public CA certificate and the in-memory trust patch). They come from the
 CrossCrease Blaze server project and contain no private keys.
 
-The patches\ folder holds the CrossCrease compatibility patch for NHL 17 update 1.08, applied in
-memory when the game starts. It changes a few bytes of game code; the game files are not modified.
+The patches\ folder holds the CrossCrease compatibility patch for NHL 17 update 1.08 and the
+optional render resolution patches (1080p, 1440p), applied in memory when the game starts. They
+change a few bytes of game code; the game files are not modified.
 
 No game files, console firmware, keys or saves are included. You need your own copy of NHL 17.
 "@
@@ -85,7 +86,7 @@ Copy-Listed $PSScriptRoot 'run_nhl17.ps1', 'run_nhl17_online.ps1', 'rename_onlin
 # The launcher (0.9.1+) runs crosscrease-nhl17.exe, which needs no PowerShell (Wine/Proton); older
 # launchers still run the scripts above.
 & (Join-Path $PSScriptRoot 'build_start_program.ps1') -Out (Join-Path $runtimeStage 'tools\crosscrease-nhl17.exe') | Out-Null
-Copy-Listed (Join-Path $root 'patches') 'nhl17-compat.xml' (Join-Path $runtimeStage 'patches')
+Copy-Listed (Join-Path $root 'patches') 'nhl17-compat.xml', 'nhl17-resolution-1080p.xml', 'nhl17-resolution-1440p.xml' (Join-Path $runtimeStage 'patches')
 Copy-Listed $root 'LICENSE' $runtimeStage
 Copy-Item -LiteralPath (Join-Path $root 'LICENSES') -Destination (Join-Path $runtimeStage 'LICENSES') -Recurse
 Set-Content -LiteralPath (Join-Path $runtimeStage 'README.txt') -Value $notice -Encoding ASCII
