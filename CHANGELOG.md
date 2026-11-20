@@ -2,7 +2,7 @@
 
 Changes to CrossCrease NHL 17 releases. Versions follow [semantic versioning](https://semver.org/); the version source of truth is `tools/release/VERSION`. See [RELEASING.md](RELEASING.md) for how releases are built.
 
-## Unreleased
+## 0.4.8 — Faster on slower graphics cards
 
 - Performance: gameplay no longer drops to 30 fps on PCs whose graphics card is the limit
   (reported on a Radeon RX 7600 under Linux). When the game wrote memory the GPU had just
@@ -32,6 +32,7 @@ Changes to CrossCrease NHL 17 releases. Versions follow [semantic versioning](ht
   address and port) and the socket type in each `socket` event.
 - Crash logs: an unhandled guest exception also logs the registers and the stack values that
   point into the guest module range, so the game call chain can be reconstructed.
+- The online connection files are the same as in 0.4.7.
 
 ## 0.4.7 — Linux startup crash fixed
 
