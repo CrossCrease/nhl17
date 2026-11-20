@@ -2,7 +2,7 @@
 
 Changes to CrossCrease NHL 17 releases. Versions follow [semantic versioning](https://semver.org/); the version source of truth is `tools/release/VERSION`. See [RELEASING.md](RELEASING.md) for how releases are built.
 
-## Unreleased
+## 0.4.9 — Resolution and 120 fps options
 
 - Graphics options: `-Resolution 900p|1080p|1440p` and `-FrameRate 60|120` for
   `crosscrease-nhl17.exe play`, `tools/run_nhl17_online.ps1` and `tools/run_nhl17.ps1` (the
@@ -13,6 +13,7 @@ Changes to CrossCrease NHL 17 releases. Versions follow [semantic versioning](ht
   then runs at up to 120 fps and menus at 60. Online matches stay near 60 fps, because the game
   keeps every player in a match in step; mixing 60 and 120 players in one match works. Higher
   settings need a faster graphics card; the defaults (900p, 60) are unchanged.
+- The emulator (`shadPS4.exe`) and the online connection files are the same as in 0.4.8.
 
 ## 0.4.8 — Faster on slower graphics cards
 
