@@ -5,6 +5,7 @@
 
 #include "common/alignment.h"
 #include "common/assert.h"
+#include "common/performance_scope.h"
 #include "video_core/buffer_cache/buffer.h"
 #include "video_core/renderer_vulkan/vk_instance.h"
 #include "video_core/renderer_vulkan/vk_platform.h"
@@ -287,6 +288,7 @@ bool StreamBuffer::WaitPendingOperations(u64 requested_upper_bound, bool allow_w
         if (!scheduler.IsFree(watch.tick) && !allow_wait) {
             return false;
         }
+        PERFORMANCE_SCOPE("WaitStreamBuffer");
         scheduler.Wait(watch.tick);
         wait_bound = watch.upper_bound;
         ++wait_cursor;

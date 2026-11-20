@@ -3,6 +3,8 @@
 
 #pragma once
 
+#include <algorithm>
+#include <array>
 #include <utility>
 
 #include "common/adaptive_mutex.h"
@@ -31,6 +33,10 @@ public:
         cpu.Fill(true);
         gpu.Fill(false);
     }
+
+    /// Pages the guest writes in this many frames in a row stop being write-protected: protecting
+    /// them again after every upload costs a fault per page and frame, which is slow under Wine.
+    static constexpr u32 HOT_WRITE_STREAK = 4;
     explicit RegionManager() = default;
 
     void SetCpuAddress(VAddr new_cpu_addr) {
@@ -162,6 +168,92 @@ public:
         }
     }
 
+    /// Records a CPU write fault on the pages of a region; the caller holds the lock.
+    void NoteCpuWrite(u64 offset, u64 size, u32 frame) noexcept {
+        const u64 first_page = offset / BYTES_PER_PAGE;
+        const u64 last_page = (offset + size - 1) / BYTES_PER_PAGE;
+        const u32 now = frame & 0xFFFFFF;
+        for (u64 page = first_page; page <= last_page; ++page) {
+            u32& history = write_history[page];
+            const u32 last = history >> 8;
+            u32 streak = history & 0xFF;
+            if (history != 0 && last == now) {
+                continue;
+            }
+            streak = history != 0 && ((now - last) & 0xFFFFFF) <= 2 ? std::min(streak + 1, 255U)
+                                                                       : 1U;
+            history = (now << 8) | streak;
+            const u64 index = page / PAGES_PER_WORD;
+            const u64 bit = u64{1} << (page % PAGES_PER_WORD);
+            if (streak >= HOT_WRITE_STREAK && !(gpu[index] & bit) && !(hot[index] & bit)) {
+                hot[index] |= bit;
+                hot_fresh[index] |= bit;
+            }
+        }
+    }
+
+    /// Like ForEachModifiedRange<Type::CPU, StateOp::Clear, StateOp::None>, but pages marked hot
+    /// stay CPU-modified and unprotected. For each of them hot_func(page address, fresh) uploads
+    /// the page if its contents changed and returns false once the page should be protected again.
+    void ForEachCpuUploadRange(u64 offset, s64 size, auto&& func, auto&& hot_func) {
+        auto bounds = GetBounds(offset, size);
+        if (!HasEffect<StateOp::Clear, StateOp::None, Type::CPU>(bounds)) {
+            return;
+        }
+        bool update_watchers{};
+        RegionBits write_prot;
+        RegionBits read_prot;
+        std::array<u64, NUM_REGION_WORDS> kept;
+        u64 start_page{};
+        u64 end_page{};
+        Bounds watcher_bounds = MIN_BOUNDS;
+        std::scoped_lock lk{mutex};
+        IterateWords(bounds, [&](u64 index, u64 mask) {
+            const u64 base_page = index * PAGES_PER_WORD;
+            u64 keep = 0;
+            const u64 hot_word = cpu[index] & mask & hot[index];
+            IteratePages(hot_word, [&](u64 pages_offset, u64 pages_size) {
+                for (u64 i = pages_offset; i < pages_offset + pages_size; ++i) {
+                    const u64 bit = u64{1} << i;
+                    const bool fresh = hot_fresh[index] & bit;
+                    hot_fresh[index] &= ~bit;
+                    if (hot_func(cpu_addr + (base_page + i) * BYTES_PER_PAGE, fresh)) {
+                        keep |= bit;
+                    } else {
+                        hot[index] &= ~bit;
+                    }
+                }
+            });
+            kept[index] = keep;
+            const u64 normal_mask = mask & ~keep;
+            const u64 word = cpu[index] & normal_mask;
+            update_watchers |= UpdateProtection<StateOp::Clear, StateOp::None>(
+                write_prot, read_prot, watcher_bounds, index, normal_mask);
+            IteratePages(word, [&](u64 pages_offset, u64 pages_size) {
+                if (end_page == base_page + pages_offset) {
+                    end_page += pages_size;
+                    return;
+                }
+                if (end_page) {
+                    func(cpu_addr + start_page * BYTES_PER_PAGE,
+                         (end_page - start_page) * BYTES_PER_PAGE);
+                }
+                start_page = base_page + pages_offset;
+                end_page = start_page + pages_size;
+            });
+        });
+        if (end_page) {
+            func(cpu_addr + start_page * BYTES_PER_PAGE, (end_page - start_page) * BYTES_PER_PAGE);
+        }
+        if (update_watchers) {
+            tracker->UpdatePageWatchersForRegion(cpu_addr, watcher_bounds, write_prot, read_prot,
+                                                 PageOp::Track, PageOp::None);
+        }
+        IterateWords(bounds, [&](u64 index, u64 mask) {
+            UpdateState<StateOp::Clear, StateOp::None>(index, mask & ~kept[index]);
+        });
+    }
+
     template <Type type>
     bool IsRegionModified(u64 offset, u64 size) noexcept {
         const auto& state = GetRegionBits<type>();
@@ -241,6 +333,9 @@ private:
                 cpu[index] ? (cpu.set_summary | summary_bit) : (cpu.set_summary & ~summary_bit);
             cpu.clear_summary = cpu[index] != ~u64{0} ? (cpu.clear_summary | summary_bit)
                                                       : (cpu.clear_summary & ~summary_bit);
+        }
+        if constexpr (gpu_op == StateOp::Set) {
+            hot[index] &= ~mask;
         }
         if constexpr (gpu_op != StateOp::None) {
             gpu[index] = Apply<gpu_op>(gpu[index], mask);
@@ -334,6 +429,9 @@ private:
     u32 readbacks_mode;
     RegionBits cpu;
     RegionBits gpu;
+    std::array<u64, NUM_REGION_WORDS> hot{};
+    std::array<u64, NUM_REGION_WORDS> hot_fresh{};
+    std::array<u32, NUM_REGION_PAGES> write_history{};
     LockType mutex;
 };
 

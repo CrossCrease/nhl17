@@ -4,6 +4,19 @@ Changes to CrossCrease NHL 17 releases. Versions follow [semantic versioning](ht
 
 ## Unreleased
 
+- Performance: gameplay no longer drops to 30 fps on PCs whose graphics card is the limit
+  (reported on a Radeon RX 7600 under Linux). When the game wrote memory the GPU had just
+  written, the emulator stopped and waited for the whole GPU queue, many times per frame. It
+  now copies such pages right after the GPU writes them and hands the game that copy, waiting
+  only for the GPU work the game itself waited for, on the game's thread. With a test load
+  that halves the GPU's speed, gameplay ran at 59 fps instead of 32.
+- Performance: memory pages the game rewrites every frame are no longer write-protected and
+  checked by a fault after every upload; the emulator compares their contents once per
+  frame instead. This removes about 17,000 page faults per second in a match, which matters
+  most under Linux (Proton or Wine), where each fault is slow.
+- Developer tests: `SHADPS4_READBACK_SNAPSHOTS=0` turns the page copies off (the previous
+  readback path); `SHADPS4_DEBUG_GPU_LOAD_MB=<n>` adds GPU work before every dispatch so a
+  fast PC behaves like one with a slower graphics card. More profile scopes for GPU waits.
 - Graphics: textures the game paints at run time and later reads with more mip levels (for
   example EASHL club jerseys) keep their content. Before, the texture cache threw the painted
   image away, so some clients showed a club's jersey black with no trim or crest, and each

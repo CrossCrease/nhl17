@@ -4,6 +4,8 @@
 #include <algorithm>
 #include <charconv>
 #include <cstdlib>
+#include <chrono>
+#include <cstring>
 #include <magic_enum/magic_enum.hpp>
 #include <xxhash.h>
 
@@ -118,6 +120,7 @@ BufferCache::BufferCache(const Vulkan::Instance& instance_, Vulkan::Scheduler& s
 BufferCache::~BufferCache() = default;
 
 void BufferCache::TickFrame() {
+    memory_tracker->TickFrame();
     if (std::exchange(fault_process_pending, false)) {
         fault_manager->ProcessFaultBuffer();
     }
@@ -136,42 +139,102 @@ void BufferCache::UnmarkRegionAsGpuModified(VAddr device_addr, u64 size, bool is
 
 void BufferCache::ReadMemory(VAddr device_addr, u64 size, bool is_write, bool async,
                              bool assume_locks) {
-    const auto flush_request = [this, device_addr, size, is_write, async] {
+    // GPU-modified ranges come as many small scattered islands,
+    // so the download is widened to a window around the request
+    static const u64 WindowSize = []() -> u64 {
+        const char* value = std::getenv("SHADPS4_BUFFER_READBACK_KIB");
+        if (!value) {
+            return 512_KB;
+        }
+        const std::string_view text{value};
+        u64 kib{};
+        const auto [end, error] = std::from_chars(text.data(), text.data() + text.size(), kib);
+        if (error != std::errc{} || end != text.data() + text.size() || kib < 64 ||
+            kib > 4096 || !std::has_single_bit(kib)) {
+            return 512_KB;
+        }
+        return kib * 1024;
+    }();
+    // SHADPS4_READBACK_SNAPSHOTS=0 serves every readback with the exact download path.
+    static const bool no_snapshot = [] {
+        const char* value = std::getenv("SHADPS4_READBACK_SNAPSHOTS");
+        return value && value[0] == '0';
+    }();
+    const auto get_window = [this, device_addr, size](const Buffer*& arena) {
         const u32 first_block = device_addr >> block_shift;
         const u32 last_block = (device_addr + size - 1) >> block_shift;
-        const auto* arena = GetArena(first_block, last_block);
-
-        // GPU-modified ranges come as many small scattered islands,
-        // so the download is widened to a window around the request
-        static const u64 WindowSize = []() -> u64 {
-            const char* value = std::getenv("SHADPS4_BUFFER_READBACK_KIB");
-            if (!value) {
-                return 512_KB;
-            }
-            const std::string_view text{value};
-            u64 kib{};
-            const auto [end, error] = std::from_chars(text.data(), text.data() + text.size(), kib);
-            if (error != std::errc{} || end != text.data() + text.size() || kib < 64 ||
-                kib > 4096 || !std::has_single_bit(kib)) {
-                return 512_KB;
-            }
-            return kib * 1024;
-        }();
+        arena = GetArena(first_block, last_block);
         const VAddr arena_end = arena->cpu_addr + arena->size_bytes;
         const VAddr window_start =
             std::max<VAddr>(Common::AlignDown(device_addr, WindowSize), arena->cpu_addr);
         const VAddr window_end = std::min<VAddr>(
             std::max<VAddr>(window_start + WindowSize, device_addr + size), arena_end);
+        return std::pair{window_start, window_end};
+    };
+    const auto flush_request = [this, device_addr, size, is_write, async, get_window] {
+        const Buffer* arena{};
+        const auto [window_start, window_end] = get_window(arena);
         DownloadMemory(arena, window_start, window_end - window_start, async);
         if (is_write) {
             memory_tracker->MarkRegionAsCpuModified(device_addr, size);
         }
     };
+    const bool use_snapshots = is_write && !async && !no_snapshot;
+    const VAddr page_addr = Common::AlignDown(device_addr, BYTES_PER_PAGE);
     if (assume_locks) {
+        // Already on the GPU thread: serve the fault here.
+        if (use_snapshots) {
+            const Buffer* arena{};
+            const auto [window_start, window_end] = get_window(arena);
+            SnapshotRead read;
+            if (PrepareSnapshotRead(device_addr, window_start, window_end, read)) {
+                WriteSnapshotRead(read);
+                if (CommitSnapshotRead(read, page_addr)) {
+                    memory_tracker->MarkRegionAsCpuModified(device_addr, size);
+                    return;
+                }
+            }
+        }
         flush_request();
-    } else {
-        liverpool->SendCommand<true>(std::move(flush_request));
+        return;
     }
+    if (use_snapshots) {
+        // The GPU thread picks the snapshots, this guest thread waits for them, so the GPU
+        // thread keeps feeding the GPU in the meantime. When the GPU writes the page again
+        // while this thread waits, the snapshot path is tried again before the exact path.
+        static constexpr int MaxAttempts = 3;
+        for (int attempt = 0; attempt < MaxAttempts; ++attempt) {
+            SnapshotRead read;
+            bool prepared = false;
+            liverpool->SendCommand<true>([&] {
+                const Buffer* arena{};
+                const auto [window_start, window_end] = get_window(arena);
+                prepared = PrepareSnapshotRead(device_addr, window_start, window_end, read);
+                if (!prepared) {
+                    flush_request();
+                }
+            });
+            if (!prepared) {
+                return;
+            }
+            WriteSnapshotRead(read);
+            bool committed = false;
+            liverpool->SendCommand<true>([&] {
+                committed = CommitSnapshotRead(read, page_addr);
+                if (committed) {
+                    memory_tracker->MarkRegionAsCpuModified(device_addr, size);
+                } else if (attempt + 1 == MaxAttempts) {
+                    flush_request();
+                }
+            });
+            if (committed) {
+                return;
+            }
+            PERFORMANCE_SCOPE("ReadbackCommitRetry");
+        }
+        return;
+    }
+    liverpool->SendCommand<true>(std::move(flush_request));
 }
 
 void BufferCache::DownloadMemory(const Buffer* arena, VAddr device_addr, u64 size, bool async) {
@@ -224,7 +287,10 @@ void BufferCache::DownloadMemory(const Buffer* arena, VAddr device_addr, u64 siz
     if (async) {
         scheduler.DeferOperation(std::move(write_data));
     } else {
-        scheduler.Finish();
+        {
+            PERFORMANCE_SCOPE("WaitBufferDownload");
+            scheduler.Finish();
+        }
         write_data();
     }
 }
@@ -252,6 +318,7 @@ std::pair<const Buffer*, u64> BufferCache::ObtainBuffer(VAddr device_addr, u32 s
     SynchronizeMemory(arena, device_addr, size, is_written, is_texel_buffer);
     if (is_written) {
         gpu_modified_ranges.Add(device_addr, size);
+        NoteGpuWrite(device_addr, size);
     }
     return {arena, arena->Offset(device_addr)};
 }
@@ -279,6 +346,9 @@ void BufferCache::MarkRegionAsGpuModified(VAddr addr, size_t size) {
     texture_cache.MarkAsMaybeGpuDirty(addr, size);
     memory_tracker->MarkRegionAsGpuModified(addr, size);
     gpu_modified_ranges.Add(addr, size);
+    // Callers mark the region after recording the command that writes it.
+    NoteGpuWrite(addr, size);
+    SealGpuWrites();
 }
 
 void BufferCache::ReadEdgeImagePages(const Image& image) {
@@ -468,15 +538,39 @@ bool BufferCache::SynchronizeMemory(const Buffer* arena, VAddr device_addr, u32 
                                     bool is_written, bool is_texel_buffer) {
     PERFORMANCE_SCOPE("SynchronizeBufferMemory");
     boost::container::small_vector<vk::BufferCopy, 4> copies;
+    // Where each copy reads from: guest memory (nullptr) or a hot page's checked contents.
+    boost::container::small_vector<const u8*, 4> sources;
     size_t total_size_bytes{};
-    memory_tracker->ForEachUploadRange(device_addr, size, is_written, [&](u64 addr, u64 size) {
+    const auto add_range = [&](u64 addr, u64 size, const u8* source) {
         copies.emplace_back(total_size_bytes, addr, size);
+        sources.push_back(source);
         total_size_bytes += size;
-    });
+    };
+    if (is_written) {
+        memory_tracker->ForEachUploadRange(device_addr, size, true, [&](u64 addr, u64 size) {
+            add_range(addr, size, nullptr);
+        });
+    } else {
+        memory_tracker->ForEachUploadRange(
+            device_addr, size, [&](u64 addr, u64 size) { add_range(addr, size, nullptr); },
+            [&](VAddr page_addr, bool fresh) {
+                bool keep_hot = true;
+                if (const auto* page = CheckHotPage(arena, page_addr, fresh, keep_hot)) {
+                    add_range(page_addr, page->data.size(), page->data.data());
+                }
+                return keep_hot;
+            });
+    }
     if (!copies.empty()) {
         const auto staging = staging_pool.Request(total_size_bytes, MemoryType::HostUncached);
-        for (auto& copy : copies) {
-            memory->CopySparseMemory(copy.dstOffset, staging.mapped + copy.srcOffset, copy.size);
+        for (size_t i = 0; i < copies.size(); ++i) {
+            auto& copy = copies[i];
+            if (sources[i]) {
+                std::memcpy(staging.mapped + copy.srcOffset, sources[i], copy.size);
+            } else {
+                memory->CopySparseMemory(copy.dstOffset, staging.mapped + copy.srcOffset,
+                                         copy.size);
+            }
             copy.srcOffset += staging.offset;
             copy.dstOffset -= arena->cpu_addr;
         }
@@ -487,6 +581,240 @@ bool BufferCache::SynchronizeMemory(const Buffer* arena, VAddr device_addr, u32 
         return SynchronizeMemoryFromImage(arena, device_addr, size);
     }
     return false;
+}
+
+void BufferCache::NoteGpuWrite(VAddr device_addr, u64 size) {
+    if (num_readback_pages.load(std::memory_order_relaxed) == 0) {
+        return;
+    }
+    std::scoped_lock lk{readback_mutex};
+    const VAddr end = device_addr + size;
+    for (auto it = readback_pages.lower_bound(Common::AlignDown(device_addr, BYTES_PER_PAGE));
+         it != readback_pages.end() && it->first < end; ++it) {
+        if (it->second.state != ReadbackState::Unsealed) {
+            it->second.state = ReadbackState::Unsealed;
+            readback_unsealed.push_back(it->first);
+        }
+    }
+}
+
+void BufferCache::SealGpuWrites() {
+    if (num_readback_pages.load(std::memory_order_relaxed) == 0) {
+        return;
+    }
+    std::scoped_lock lk{readback_mutex};
+    for (const VAddr page_addr : readback_unsealed) {
+        const auto it = readback_pages.find(page_addr);
+        if (it != readback_pages.end() && it->second.state == ReadbackState::Unsealed) {
+            it->second.state = ReadbackState::Pending;
+            readback_pending.push_back(page_addr);
+        }
+    }
+    readback_unsealed.clear();
+}
+
+bool BufferCache::HasPendingReadbackSnapshots() {
+    if (num_readback_pages.load(std::memory_order_relaxed) == 0) {
+        return false;
+    }
+    std::scoped_lock lk{readback_mutex};
+    return !readback_pending.empty();
+}
+
+void BufferCache::RecordReadbackSnapshots() {
+    // Pages that have not needed a readback for this many frames stop being copied.
+    static constexpr u32 ReadbackIdleFrames = 1200;
+    if (num_readback_pages.load(std::memory_order_relaxed) == 0) {
+        return;
+    }
+    PERFORMANCE_SCOPE("RecordReadbackSnapshots");
+    std::scoped_lock lk{readback_mutex};
+    // The submission being recorded signals the tick before the current one.
+    const u64 tick = scheduler.CurrentTick() - 1;
+    boost::container::small_vector<std::pair<const Buffer*, vk::BufferCopy>, 32> copies;
+    for (const VAddr page_addr : readback_pending) {
+        const auto it = readback_pages.find(page_addr);
+        if (it == readback_pages.end() || it->second.state != ReadbackState::Pending) {
+            continue;
+        }
+        const u64 block = page_addr >> block_shift;
+        const auto* arena = GetArena(block, block);
+        copies.emplace_back(arena, vk::BufferCopy{
+                                       .srcOffset = arena->Offset(page_addr),
+                                       .dstOffset = u64(it->second.slot) * BYTES_PER_PAGE,
+                                       .size = BYTES_PER_PAGE,
+                                   });
+        it->second.state = ReadbackState::Snapshotted;
+        it->second.snapshot_tick = tick;
+    }
+    readback_pending.clear();
+    for (size_t i = 0; i < copies.size();) {
+        boost::container::small_vector<vk::BufferCopy, 32> batch;
+        const Buffer* arena = copies[i].first;
+        for (; i < copies.size() && copies[i].first == arena; ++i) {
+            batch.push_back(copies[i].second);
+        }
+        runtime.CopyBuffer(arena, readback_snapshots.get(), batch);
+    }
+    if (++readback_submits % 512 != 0) {
+        return;
+    }
+    const u32 frame = memory_tracker->CurrentFrame();
+    for (auto it = readback_pages.begin(); it != readback_pages.end();) {
+        const auto& page = it->second;
+        if (frame - page.last_fault_frame > ReadbackIdleFrames &&
+            page.state != ReadbackState::Unsealed && page.state != ReadbackState::Pending) {
+            readback_free_slots.push_back(page.slot);
+            it = readback_pages.erase(it);
+        } else {
+            ++it;
+        }
+    }
+    num_readback_pages.store(readback_pages.size(), std::memory_order_relaxed);
+}
+
+bool BufferCache::PrepareSnapshotRead(VAddr device_addr, VAddr window_start, VAddr window_end,
+                                      SnapshotRead& read) {
+    // Up to this many pages (16 MiB of host memory) are kept as readback pages.
+    static constexpr u32 ReadbackSlots = 4096;
+    const VAddr page_addr = Common::AlignDown(device_addr, BYTES_PER_PAGE);
+    bool pending = false;
+    {
+        std::scoped_lock lk{readback_mutex};
+        const auto it = readback_pages.find(page_addr);
+        pending = it != readback_pages.end() && it->second.state == ReadbackState::Pending;
+    }
+    if (pending) {
+        // Written in the open command buffer: submitting it records the snapshot.
+        PERFORMANCE_SCOPE("ReadbackSubmitPending");
+        scheduler.Flush();
+    }
+    {
+        std::scoped_lock lk{readback_mutex};
+        const u32 frame = memory_tracker->CurrentFrame();
+        auto it = readback_pages.find(page_addr);
+        if (it == readback_pages.end()) {
+            // First readback of this page: take the exact path and copy the page from now on.
+            PERFORMANCE_SCOPE("ReadbackMissNew");
+            if (!readback_snapshots) {
+                readback_snapshots = std::make_unique<Buffer>(
+                    instance, 0, u64(ReadbackSlots) * BYTES_PER_PAGE, MemoryType::HostCached,
+                    "ReadbackSnapshots");
+                for (u32 slot = ReadbackSlots; slot > 0; --slot) {
+                    readback_free_slots.push_back(slot - 1);
+                }
+            }
+            if (!readback_free_slots.empty()) {
+                readback_pages.emplace(page_addr, ReadbackPage{
+                                                      .slot = readback_free_slots.back(),
+                                                      .state = ReadbackState::Invalid,
+                                                      .last_fault_frame = frame,
+                                                      .snapshot_tick = 0,
+                                                  });
+                readback_free_slots.pop_back();
+                num_readback_pages.store(readback_pages.size(), std::memory_order_relaxed);
+            }
+            return false;
+        }
+        it->second.last_fault_frame = frame;
+        if (it->second.state != ReadbackState::Snapshotted) {
+            PERFORMANCE_SCOPE("ReadbackMissNoSnapshot");
+            return false;
+        }
+        // Serve the other readback pages of the download window too, as the exact path would.
+        for (auto jt = readback_pages.lower_bound(window_start);
+             jt != readback_pages.end() && jt->first < window_end; ++jt) {
+            if (jt->second.state != ReadbackState::Snapshotted ||
+                !memory_tracker->IsRegionGpuModified(jt->first, BYTES_PER_PAGE)) {
+                continue;
+            }
+            auto& page = read.pages.emplace_back();
+            page.addr = jt->first;
+            page.slot = jt->second.slot;
+            page.snapshot_tick = jt->second.snapshot_tick;
+            gpu_modified_ranges.ForEachInRange(jt->first, BYTES_PER_PAGE,
+                                               [&](VAddr start, VAddr end) {
+                                                   page.ranges.emplace_back(start, end);
+                                               });
+            read.tick = std::max(read.tick, jt->second.snapshot_tick);
+        }
+    }
+    if (read.pages.empty()) {
+        return false;
+    }
+    PERFORMANCE_SCOPE("ReadbackSnapshotHit");
+    if (!scheduler.IsFree(read.tick)) {
+        // Hand the recorded work to the GPU so it stays busy while the snapshot is awaited.
+        scheduler.Flush();
+    }
+    return true;
+}
+
+void BufferCache::WriteSnapshotRead(const SnapshotRead& read) {
+    auto* semaphore = scheduler.GetWorkSemaphore();
+    if (!semaphore->IsFree(read.tick)) {
+        PERFORMANCE_SCOPE("WaitReadbackSnapshot");
+        semaphore->Wait(read.tick);
+    }
+    for (const auto& page : read.pages) {
+        const u64 slot_offset = u64(page.slot) * BYTES_PER_PAGE;
+        readback_snapshots->Invalidate(slot_offset, BYTES_PER_PAGE);
+        const u8* data = readback_snapshots->mapped_data.data() + slot_offset;
+        for (const auto& [start, end] : page.ranges) {
+            memory->TryWriteBacking(std::bit_cast<u8*>(start), data + (start - page.addr),
+                                    end - start);
+        }
+    }
+}
+
+bool BufferCache::CommitSnapshotRead(const SnapshotRead& read, VAddr page_addr) {
+    bool served = false;
+    std::scoped_lock lk{readback_mutex};
+    for (const auto& page : read.pages) {
+        const auto it = readback_pages.find(page.addr);
+        // A page the GPU wrote again since its snapshot stays GPU modified.
+        if (it == readback_pages.end() || it->second.state != ReadbackState::Snapshotted ||
+            it->second.snapshot_tick != page.snapshot_tick) {
+            continue;
+        }
+        gpu_modified_ranges.Subtract(page.addr, BYTES_PER_PAGE);
+        memory_tracker->UnmarkRegionAsGpuModified(page.addr, BYTES_PER_PAGE, false);
+        served |= page.addr == page_addr;
+    }
+    return served;
+}
+
+const BufferCache::HotPage* BufferCache::CheckHotPage(const Buffer* owner, VAddr page_addr,
+                                                     bool fresh,
+                                                     bool& keep_hot) {
+    // A hot page that has not changed for this many frames is write-protected again.
+    static constexpr u32 HotPageIdleFrames = 120;
+    PERFORMANCE_SCOPE("HotPageCheck");
+    const u32 frame = memory_tracker->CurrentFrame();
+    std::scoped_lock lk{hot_pages_mutex};
+    auto& page = hot_pages[page_addr];
+    if (!page) {
+        page = std::make_unique<HotPage>();
+        fresh = true;
+    } else if (!fresh && page->last_check_frame == frame) {
+        // Checked once in this guest submission already: the guest writes per-frame data
+        // before it submits, so comparing again within the same submission finds nothing new.
+        return nullptr;
+    }
+    page->last_check_frame = frame;
+    std::array<u8, BYTES_PER_PAGE> current;
+    memory->CopySparseMemory(page_addr, current.data(), current.size());
+    if (fresh || std::memcmp(page->data.data(), current.data(), current.size()) != 0) {
+        PERFORMANCE_SCOPE("HotPageUpload");
+        page->data = current;
+        page->last_change_frame = frame;
+        return page.get();
+    }
+    if (frame - page->last_change_frame > HotPageIdleFrames) {
+        hot_pages.erase(page_addr);
+        keep_hot = false;
+    }
+    return nullptr;
 }
 
 bool BufferCache::SynchronizeMemoryFromImage(const Buffer* arena, VAddr device_addr, u32 size) {

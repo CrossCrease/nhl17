@@ -11,6 +11,7 @@
 #include "common/debug.h"
 #include "common/div_ceil.h"
 #include "common/hash.h"
+#include "common/performance_scope.h"
 #include "core/emulator_settings.h"
 #include "core/memory.h"
 #include "video_core/buffer_cache/buffer_cache.h"
@@ -112,7 +113,10 @@ void TextureCache::ProcessDownloadImages() {
     }
     download_images.clear();
     lk.unlock();
-    scheduler.Finish();
+    {
+        PERFORMANCE_SCOPE("WaitImageDownloads");
+        scheduler.Finish();
+    }
     scheduler.PopPendingOperations();
     if (profile_readbacks) {
         static thread_local auto sample_started = started;
@@ -205,7 +209,10 @@ void TextureCache::DownloadImageMemory(ImageId image_id, DownloadMemoryFlags fla
     if (is_priority) {
         scheduler.DeferPriorityOperation(std::move(write_data));
     } else if (is_sync) {
-        scheduler.Finish();
+        {
+            PERFORMANCE_SCOPE("WaitImageDownloadSync");
+            scheduler.Finish();
+        }
         write_data();
     } else {
         scheduler.DeferOperation(std::move(write_data));
@@ -1200,6 +1207,7 @@ void TextureCache::GarbageCollectImages() {
 
     if (!maybe_download.empty()) {
         // wait for memory reads to finish
+        PERFORMANCE_SCOPE("WaitImageGcHash");
         scheduler.Finish();
         scheduler.PopPendingOperations();
 
@@ -1225,6 +1233,7 @@ void TextureCache::GarbageCollectImages() {
         // We need to make downloads synchronous. It is possible that the contents
         // of the image are requested before they are downloaded in which case
         // outdated buffer cache contents are used instead.
+        PERFORMANCE_SCOPE("WaitImageGcDownload");
         scheduler.Finish();
         scheduler.PopPendingOperations();
     }
