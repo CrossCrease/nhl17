@@ -127,6 +127,7 @@ struct DynamicState {
         bool line_width : 1;
         bool feedback_loop_enabled : 1;
     } dirty_state{};
+    u32 generation{};
 
     Viewports viewports{};
     Scissors scissors{};
@@ -170,6 +171,14 @@ struct DynamicState {
     /// Invalidates all dynamic state to be flushed into the next command buffer.
     void Invalidate() {
         std::memset(&dirty_state, 0xFF, sizeof(dirty_state));
+        ++generation;
+    }
+
+    /// Changes on every Invalidate(): a new command buffer, or another pass that bound its own
+    /// pipeline. State cached by the rasterizer (bound pipeline, vertex input) is only reused
+    /// while this value is unchanged.
+    u32 Generation() const noexcept {
+        return generation;
     }
 
     void SetViewports(const Viewports& viewports_) {

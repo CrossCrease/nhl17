@@ -223,7 +223,7 @@ void Rasterizer::Draw(bool is_indexed, u32 index_offset) {
     const auto [vertex_offset, instance_offset] = GetDrawOffsets(regs, vs_info, fetch_shader);
 
     const auto cmdbuf = scheduler.CommandBuffer();
-    cmdbuf.bindPipeline(vk::PipelineBindPoint::eGraphics, pipeline->Handle());
+    BindGraphicsPipeline(pipeline);
 
     if (is_indexed) {
         cmdbuf.drawIndexed(regs.num_indices, regs.num_instances.NumInstances(), 0,
@@ -292,7 +292,7 @@ void Rasterizer::DrawIndirect(bool is_indexed, VAddr arg_address, u32 offset, u3
     scheduler.BeginRendering(state);
 
     const auto cmdbuf = scheduler.CommandBuffer();
-    cmdbuf.bindPipeline(vk::PipelineBindPoint::eGraphics, pipeline->Handle());
+    BindGraphicsPipeline(pipeline);
 
     if (is_indexed) {
         ASSERT(sizeof(VkDrawIndexedIndirectCommand) == stride);
@@ -469,6 +469,17 @@ bool Rasterizer::BindResources(const Pipeline* pipeline) {
     return true;
 }
 
+void Rasterizer::BindGraphicsPipeline(const GraphicsPipeline* pipeline) {
+    const u32 generation = scheduler.GetDynamicState().Generation();
+    if (bound_pipeline_generation == generation &&
+        bound_graphics_pipeline == pipeline->Handle()) {
+        return;
+    }
+    scheduler.CommandBuffer().bindPipeline(vk::PipelineBindPoint::eGraphics, pipeline->Handle());
+    bound_graphics_pipeline = pipeline->Handle();
+    bound_pipeline_generation = generation;
+}
+
 void Rasterizer::BindVertexBuffers(const GraphicsPipeline* pipeline) {
     const auto& regs = liverpool->regs;
     VertexInputs<vk::VertexInputAttributeDescription2EXT> attributes;
@@ -479,9 +490,17 @@ void Rasterizer::BindVertexBuffers(const GraphicsPipeline* pipeline) {
                               regs.vgt_instance_step_rate_0, regs.vgt_instance_step_rate_1);
 
     if (instance.IsVertexInputDynamicState()) {
-        // Update current vertex inputs.
-        const auto cmdbuf = scheduler.CommandBuffer();
-        cmdbuf.setVertexInputEXT(bindings, attributes);
+        // Update current vertex inputs, unless the previous draw already set the same ones.
+        const u32 generation = scheduler.GetDynamicState().Generation();
+        if (bound_vertex_input_generation != generation ||
+            !std::ranges::equal(bound_vertex_bindings, bindings) ||
+            !std::ranges::equal(bound_vertex_attributes, attributes)) {
+            const auto cmdbuf = scheduler.CommandBuffer();
+            cmdbuf.setVertexInputEXT(bindings, attributes);
+            bound_vertex_bindings = bindings;
+            bound_vertex_attributes = attributes;
+            bound_vertex_input_generation = generation;
+        }
     }
 
     if (bindings.empty()) {

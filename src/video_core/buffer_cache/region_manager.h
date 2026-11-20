@@ -195,7 +195,10 @@ public:
     /// Like ForEachModifiedRange<Type::CPU, StateOp::Clear, StateOp::None>, but pages marked hot
     /// stay CPU-modified and unprotected. For each of them hot_func(page address, fresh) uploads
     /// the page if its contents changed and returns false once the page should be protected again.
-    void ForEachCpuUploadRange(u64 offset, s64 size, auto&& func, auto&& hot_func) {
+    /// 'frame' is the current guest submission: a hot page that hot_func already checked in it
+    /// is skipped without calling hot_func again (hot_func would find nothing new; draws touch
+    /// the same per-frame pages many times, and the lookup was a large part of each draw).
+    void ForEachCpuUploadRange(u64 offset, s64 size, u32 frame, auto&& func, auto&& hot_func) {
         auto bounds = GetBounds(offset, size);
         if (!HasEffect<StateOp::Clear, StateOp::None, Type::CPU>(bounds)) {
             return;
@@ -208,17 +211,23 @@ public:
         u64 end_page{};
         Bounds watcher_bounds = MIN_BOUNDS;
         std::scoped_lock lk{mutex};
+        if (hot_checked_frame != frame) {
+            hot_checked.fill(0);
+            hot_checked_frame = frame;
+        }
         IterateWords(bounds, [&](u64 index, u64 mask) {
             const u64 base_page = index * PAGES_PER_WORD;
-            u64 keep = 0;
             const u64 hot_word = cpu[index] & mask & hot[index];
-            IteratePages(hot_word, [&](u64 pages_offset, u64 pages_size) {
+            // Hot pages already checked in this submission (and not fresh) stay as they are.
+            u64 keep = hot_word & hot_checked[index] & ~hot_fresh[index];
+            IteratePages(hot_word & ~keep, [&](u64 pages_offset, u64 pages_size) {
                 for (u64 i = pages_offset; i < pages_offset + pages_size; ++i) {
                     const u64 bit = u64{1} << i;
                     const bool fresh = hot_fresh[index] & bit;
                     hot_fresh[index] &= ~bit;
                     if (hot_func(cpu_addr + (base_page + i) * BYTES_PER_PAGE, fresh)) {
                         keep |= bit;
+                        hot_checked[index] |= bit;
                     } else {
                         hot[index] &= ~bit;
                     }
@@ -431,6 +440,9 @@ private:
     RegionBits gpu;
     std::array<u64, NUM_REGION_WORDS> hot{};
     std::array<u64, NUM_REGION_WORDS> hot_fresh{};
+    /// Hot pages hot_func has checked in guest submission 'hot_checked_frame'.
+    std::array<u64, NUM_REGION_WORDS> hot_checked{};
+    u32 hot_checked_frame{};
     std::array<u32, NUM_REGION_PAGES> write_history{};
     LockType mutex;
 };

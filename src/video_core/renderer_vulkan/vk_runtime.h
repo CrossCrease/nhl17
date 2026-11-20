@@ -97,7 +97,9 @@ private:
         AccessList write_ranges;
     };
     BufferBarriers* resource{};
+    /// The first num_resources entries are in use; the rest keep their allocations for reuse.
     std::vector<BufferBarriers> resources;
+    u32 num_resources{};
     VideoCore::Image::Barriers image_barriers;
     vk::MemoryBarrier2 memory_barrier{};
 };

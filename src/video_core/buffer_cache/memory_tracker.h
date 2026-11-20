@@ -108,9 +108,10 @@ public:
     /// Call 'func' for each CPU modified range and unmark those pages as CPU modified. Pages the
     /// guest writes every frame go to 'hot_func' instead and stay CPU modified.
     void ForEachUploadRange(VAddr cpu_addr, u64 size, auto&& func, auto&& hot_func) {
+        const u32 frame = CurrentFrame();
         IteratePages<true>(cpu_addr, size,
-                           [&func, &hot_func](RegionManager* manager, u64 offset, u64 size) {
-                               manager->ForEachCpuUploadRange(offset, size, func, hot_func);
+                           [&func, &hot_func, frame](RegionManager* manager, u64 offset, u64 size) {
+                               manager->ForEachCpuUploadRange(offset, size, frame, func, hot_func);
                            });
     }
 

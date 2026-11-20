@@ -124,6 +124,7 @@ private:
     bool BindResources(const Pipeline* pipeline);
 
     void BindVertexBuffers(const GraphicsPipeline* pipeline);
+    void BindGraphicsPipeline(const GraphicsPipeline* pipeline);
     void BindIndexBuffer(u32 index_offset = 0, bool is_indirect = false);
 
     void ResetBindings(bool is_compute);
@@ -175,6 +176,13 @@ private:
 
     vk::ImageAspectFlags attachment_feedback_loop{};
     bool needs_barrier{};
+    /// Graphics pipeline and vertex input last recorded, valid while the dynamic state
+    /// generation is unchanged; consecutive draws mostly repeat them.
+    vk::Pipeline bound_graphics_pipeline{};
+    u32 bound_pipeline_generation{~0U};
+    VertexInputs<vk::VertexInputAttributeDescription2EXT> bound_vertex_attributes;
+    VertexInputs<vk::VertexInputBindingDescription2EXT> bound_vertex_bindings;
+    u32 bound_vertex_input_generation{~0U};
 };
 
 } // namespace Vulkan

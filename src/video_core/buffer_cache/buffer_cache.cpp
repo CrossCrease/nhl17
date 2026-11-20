@@ -537,9 +537,9 @@ void BufferCache::EnsureResident(const Buffer* arena, u64 first_block, u64 last_
 bool BufferCache::SynchronizeMemory(const Buffer* arena, VAddr device_addr, u32 size,
                                     bool is_written, bool is_texel_buffer) {
     PERFORMANCE_SCOPE("SynchronizeBufferMemory");
-    boost::container::small_vector<vk::BufferCopy, 4> copies;
+    boost::container::small_vector<vk::BufferCopy, 16> copies;
     // Where each copy reads from: guest memory (nullptr) or a hot page's checked contents.
-    boost::container::small_vector<const u8*, 4> sources;
+    boost::container::small_vector<const u8*, 16> sources;
     size_t total_size_bytes{};
     const auto add_range = [&](u64 addr, u64 size, const u8* source) {
         copies.emplace_back(total_size_bytes, addr, size);
@@ -802,11 +802,17 @@ const BufferCache::HotPage* BufferCache::CheckHotPage(const Buffer* owner, VAddr
         return nullptr;
     }
     page->last_check_frame = frame;
-    std::array<u8, BYTES_PER_PAGE> current;
-    memory->CopySparseMemory(page_addr, current.data(), current.size());
-    if (fresh || std::memcmp(page->data.data(), current.data(), current.size()) != 0) {
+    // Compare against guest memory in place; copy only when the page changed.
+    const u8* guest = memory->GetBackingPointer(page_addr, BYTES_PER_PAGE);
+    const bool changed =
+        fresh || !guest || std::memcmp(page->data.data(), guest, BYTES_PER_PAGE) != 0;
+    if (changed) {
         PERFORMANCE_SCOPE("HotPageUpload");
-        page->data = current;
+        if (guest) {
+            std::memcpy(page->data.data(), guest, BYTES_PER_PAGE);
+        } else {
+            memory->CopySparseMemory(page_addr, page->data.data(), BYTES_PER_PAGE);
+        }
         page->last_change_frame = frame;
         return page.get();
     }
