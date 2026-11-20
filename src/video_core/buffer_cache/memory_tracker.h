@@ -4,6 +4,7 @@
 #pragma once
 
 #include <algorithm>
+#include <atomic>
 #include <deque>
 #include <vector>
 
@@ -64,17 +65,28 @@ public:
 
     /// Removes all protection from a page and ensures GPU data has been flushed if requested
     void InvalidateRegion(VAddr cpu_addr, u64 size, auto&& on_flush) noexcept {
+        const u32 frame = current_frame.load(std::memory_order_relaxed);
         if (readbacks_mode == GpuReadbacksMode::Disabled) {
-            return MarkRegionAsCpuModified(cpu_addr, size);
+            IteratePages(cpu_addr, size, [frame](RegionManager* manager, u64 offset, u64 size) {
+                const auto bounds = manager->GetBounds(offset, size);
+                manager->Lock(bounds);
+                manager->template ChangeRegionState<StateOp::Set, StateOp::None, false>(offset,
+                                                                                        size);
+                manager->NoteCpuWrite(offset, size, frame);
+                manager->Unlock(bounds);
+            });
+            return;
         }
         bool should_flush = false;
-        IteratePages(cpu_addr, size, [&should_flush](RegionManager* manager, u64 offset, u64 size) {
+        IteratePages(cpu_addr, size, [&should_flush, frame](RegionManager* manager, u64 offset,
+                                                            u64 size) {
             const auto bounds = manager->GetBounds(offset, size);
             manager->Lock(bounds);
             const bool modified = manager->template IsRegionModified<Type::GPU>(offset, size);
             if (!modified) {
                 manager->template ChangeRegionState<StateOp::Set, StateOp::None, false>(offset,
                                                                                         size);
+                manager->NoteCpuWrite(offset, size, frame);
             }
             should_flush |= modified;
             manager->Unlock(bounds);
@@ -82,6 +94,24 @@ public:
         if (should_flush) {
             on_flush();
         }
+    }
+
+    /// Advances the frame counter used to find pages the guest writes every frame
+    void TickFrame() noexcept {
+        current_frame.fetch_add(1, std::memory_order_relaxed);
+    }
+
+    u32 CurrentFrame() const noexcept {
+        return current_frame.load(std::memory_order_relaxed);
+    }
+
+    /// Call 'func' for each CPU modified range and unmark those pages as CPU modified. Pages the
+    /// guest writes every frame go to 'hot_func' instead and stay CPU modified.
+    void ForEachUploadRange(VAddr cpu_addr, u64 size, auto&& func, auto&& hot_func) {
+        IteratePages<true>(cpu_addr, size,
+                           [&func, &hot_func](RegionManager* manager, u64 offset, u64 size) {
+                               manager->ForEachCpuUploadRange(offset, size, func, hot_func);
+                           });
     }
 
     /// Call 'func' for each CPU modified range and unmark those pages as CPU modified
@@ -163,6 +193,7 @@ private:
 
     PageManager* tracker;
     const u32 readbacks_mode;
+    std::atomic<u32> current_frame{1};
     std::deque<std::array<RegionManager, MANAGER_POOL_SIZE>> manager_pool;
     std::vector<RegionManager*> free_managers;
     std::array<RegionManager*, NUM_HIGH_PAGES> top_tier{};

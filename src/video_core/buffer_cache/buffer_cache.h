@@ -3,7 +3,12 @@
 
 #pragma once
 
+#include <atomic>
 #include <deque>
+#include <map>
+#include <memory>
+#include <mutex>
+#include <unordered_map>
 #include <boost/container/small_vector.hpp>
 
 #include "common/enum.h"
@@ -126,6 +131,17 @@ public:
     /// Commits pending sparse buffer memory binds. Must be called before every scheduler submit.
     void SubmitPendingArenaBinds(Vulkan::SubmitInfo& info);
 
+    /// Notes that the GPU commands using the buffers obtained for writing so far are recorded
+    /// in the current command buffer. Call after recording each draw, dispatch, fill or copy.
+    void SealGpuWrites();
+
+    /// Copies readback pages written in the command buffer being submitted to host memory.
+    /// Must be called from the scheduler's submit callback, before the barriers are flushed.
+    void RecordReadbackSnapshots();
+
+    /// Returns true when readback pages were written in the current command buffer.
+    [[nodiscard]] bool HasPendingReadbackSnapshots();
+
 private:
     struct ArenaBinds {
         const Buffer* arena;
@@ -146,10 +162,65 @@ private:
 
     void DownloadMemory(const Buffer* arena, VAddr device_addr, u64 size, bool async);
 
+    /// Readback pages: pages the guest writes after the GPU wrote them. When the GPU writes such
+    /// a page, a copy of it is recorded at the end of that command buffer, so a later guest write
+    /// can take the GPU data from host memory instead of waiting for the whole GPU queue.
+    enum class ReadbackState : u8 {
+        Invalid,     ///< No snapshot holds the latest GPU data.
+        Unsealed,    ///< Written by a GPU command that is not recorded yet.
+        Pending,     ///< Written in the current command buffer; copied when it is submitted.
+        Snapshotted, ///< The snapshot slot holds the latest GPU data once snapshot_tick is done.
+    };
+    struct ReadbackPage {
+        u32 slot;
+        ReadbackState state;
+        u32 last_fault_frame;
+        u64 snapshot_tick;
+    };
+
+    void NoteGpuWrite(VAddr device_addr, u64 size);
+
+    /// A guest write fault served from snapshots: the pages and their GPU-modified ranges.
+    struct SnapshotRead {
+        struct Page {
+            VAddr addr;
+            u32 slot;
+            u64 snapshot_tick;
+            boost::container::small_vector<std::pair<VAddr, VAddr>, 4> ranges;
+        };
+        boost::container::small_vector<Page, 8> pages;
+        u64 tick{};
+    };
+
+    /// GPU thread: picks the snapshots that serve a write fault. Returns false when the exact
+    /// path is needed.
+    bool PrepareSnapshotRead(VAddr device_addr, VAddr window_start, VAddr window_end,
+                             SnapshotRead& read);
+
+    /// Any thread: waits for the snapshots and writes their GPU data to guest memory.
+    void WriteSnapshotRead(const SnapshotRead& read);
+
+    /// GPU thread: marks the served pages as no longer GPU modified. Returns false when the
+    /// faulting page was written by the GPU again in the meantime.
+    bool CommitSnapshotRead(const SnapshotRead& read, VAddr page_addr);
+
     bool SynchronizeMemory(const Buffer* arena, VAddr device_addr, u32 size, bool is_written,
                            bool is_texel_buffer);
 
     bool SynchronizeMemoryFromImage(const Buffer* arena, VAddr device_addr, u32 size);
+
+    /// A page the guest rewrites every frame, kept unprotected: its last uploaded contents.
+    struct HotPage {
+        std::array<u8, 4096> data;
+        u32 last_change_frame;
+        u32 last_check_frame;
+        const Buffer* owner;
+    };
+
+    /// Compares a hot page with its last upload; returns the page to upload if it changed, and
+    /// clears keep_hot once it has not changed for a while so it is protected again.
+    const HotPage* CheckHotPage(const Buffer* owner, VAddr page_addr, bool fresh,
+                                bool& keep_hot);
 
     const Vulkan::Instance& instance;
     Vulkan::Scheduler& scheduler;
@@ -164,10 +235,20 @@ private:
     Buffer gds_buffer;
     std::unique_ptr<Buffer> null_index_buffer;
     RangeSet gpu_modified_ranges;
+    std::mutex readback_mutex;
+    std::map<VAddr, ReadbackPage> readback_pages;
+    std::atomic<size_t> num_readback_pages{};
+    std::vector<VAddr> readback_unsealed;
+    std::vector<VAddr> readback_pending;
+    std::vector<u32> readback_free_slots;
+    std::unique_ptr<Buffer> readback_snapshots;
+    u32 readback_submits{};
 
     std::unique_ptr<FaultManager> fault_manager;
     std::unique_ptr<Buffer> bda_pagetable_buffer;
     bool fault_process_pending{};
+    std::mutex hot_pages_mutex;
+    std::unordered_map<VAddr, std::unique_ptr<HotPage>> hot_pages;
 
     std::array<const Buffer*, NUM_ARENA_PAGES> address_space{};
     std::deque<Buffer> arenas;

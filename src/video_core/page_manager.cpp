@@ -9,6 +9,7 @@
 #include "common/div_ceil.h"
 #include "common/error.h"
 #include "common/multi_level_page_table.h"
+#include "common/performance_scope.h"
 #include "common/signal_context.h"
 #include "common/thread.h"
 #include "core/emulator_settings.h"
@@ -428,6 +429,7 @@ struct SignalImpl : public PageManager::Impl {
         auto& impl = memory->GetAddressSpace();
         ASSERT_MSG(perms != Core::MemoryPermission::Write,
                    "Attempted to protect region as write-only which is not a valid permission");
+        PERFORMANCE_SCOPE("ProtectMemory");
         impl.Protect(address, size, perms);
     }
 
@@ -437,8 +439,10 @@ struct SignalImpl : public PageManager::Impl {
         const auto is_gpu_thread =
             std::this_thread::get_id() == rasterizer->GetGpuCommandProcessorThread();
         if (Common::IsWriteError(context)) {
+            PERFORMANCE_SCOPE("GuestWriteFault");
             return rasterizer->InvalidateMemory(addr, size, is_gpu_thread);
         } else {
+            PERFORMANCE_SCOPE("GuestReadFault");
             return rasterizer->ReadMemory(addr, size, is_gpu_thread);
         }
         return false;

@@ -49,6 +49,7 @@ Rasterizer::Rasterizer(const Instance& instance_, Scheduler& scheduler_, Runtime
     memory->SetRasterizer(this);
 
     scheduler.SetSubmitCallback([this](Vulkan::SubmitInfo& info) {
+        buffer_cache.RecordReadbackSnapshots();
         runtime.FlushBarriers();
         buffer_cache.SubmitPendingArenaBinds(info);
     });
@@ -344,6 +345,24 @@ void Rasterizer::DispatchDirect() {
     }
 
     scheduler.EndRendering();
+    {
+        // Developer aid: SHADPS4_DEBUG_GPU_LOAD_MB=<n> fills an n MiB buffer before every
+        // dispatch, so a fast GPU behaves like a slower one when measuring GPU-bound behaviour.
+        static const u64 load_mb = [] {
+            const char* v = std::getenv("SHADPS4_DEBUG_GPU_LOAD_MB");
+            return v ? std::strtoull(v, nullptr, 10) : 0ull;
+        }();
+        static std::unique_ptr<VideoCore::Buffer> load_buffer;
+        static u32 load_value = 0;
+        if (load_mb) {
+            if (!load_buffer) {
+                load_buffer = std::make_unique<VideoCore::Buffer>(
+                    instance, 0, load_mb << 20, VideoCore::MemoryType::DeviceLocal, "GpuLoad");
+            }
+            scheduler.CommandBuffer().fillBuffer(load_buffer->Handle(), 0, VK_WHOLE_SIZE,
+                                                 ++load_value);
+        }
+    }
     pipeline->BindResources(set_writes, push_data);
 
     const auto cmdbuf = scheduler.CommandBuffer();
@@ -408,6 +427,12 @@ void Rasterizer::OnSubmit() {
 
 void Rasterizer::OnFence() {
     texture_cache.ProcessDownloadImages();
+    // The guest sees the fence as soon as it is processed and may then write memory the GPU
+    // just wrote. Submitting now copies those pages at this point, so such a write waits only
+    // for the work before the fence instead of draining everything recorded after it.
+    if (buffer_cache.HasPendingReadbackSnapshots()) {
+        scheduler.Flush();
+    }
 }
 
 bool Rasterizer::BindResources(const Pipeline* pipeline) {
@@ -598,6 +623,7 @@ void Rasterizer::ResetBindings(bool is_compute) {
     bound_images.clear();
     bound_buffers.clear();
     needs_barrier = false;
+    buffer_cache.SealGpuWrites();
 }
 
 bool Rasterizer::IsComputeMetaClear(const Pipeline* pipeline) {
@@ -1244,6 +1270,7 @@ void Rasterizer::FillBuffer(VAddr address, u32 num_bytes, u32 value, bool is_gds
                                          VideoCore::ObtainBufferFlags::IsWritten);
     }();
     runtime.FillBuffer(buffer, offset, num_bytes, value);
+    buffer_cache.SealGpuWrites();
 }
 
 void Rasterizer::CopyBuffer(VAddr dst, VAddr src, u32 num_bytes, bool dst_gds, bool src_gds) {
@@ -1278,6 +1305,7 @@ void Rasterizer::CopyBuffer(VAddr dst, VAddr src, u32 num_bytes, bool dst_gds, b
         .size = num_bytes,
     };
     runtime.CopyBuffer(src_buffer, dst_buffer, std::span{&copy, 1});
+    buffer_cache.SealGpuWrites();
 }
 
 u32 Rasterizer::ReadDataFromGds(u32 gds_offset) {
