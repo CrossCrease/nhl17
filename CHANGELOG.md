@@ -2,7 +2,7 @@
 
 Changes to CrossCrease NHL 17 releases. Versions follow [semantic versioning](https://semver.org/); the version source of truth is `tools/release/VERSION`. See [RELEASING.md](RELEASING.md) for how releases are built.
 
-## Unreleased
+## 0.4.10 — Smoother Overhead camera on slower PCs
 
 - Performance: less CPU work per draw on the emulator's GPU command thread, which limited the
   frame rate with the Overhead camera on slower CPUs (reported under Proton: about 30 fps while
@@ -13,6 +13,7 @@ Changes to CrossCrease NHL 17 releases. Versions follow [semantic versioning](ht
   no longer binds them again (fewer Vulkan calls, which cost more under Wine). On the test PC
   the command thread's busy time in an Overhead match fell from about 554 to 453 ms per second
   (18% less) and the time to record a draw from 4.2 to 3.4 µs.
+- The online connection files are the same as in 0.4.9.
 
 ## 0.4.9 — Resolution and 120 fps options
 
