@@ -18,6 +18,13 @@
 
 #ifdef _WIN32
 #include <windows.h>
+#else
+#include <cerrno>
+#include <filesystem>
+#include <sys/socket.h>
+#include <sys/stat.h>
+#include <sys/un.h>
+#include <unistd.h>
 #endif
 
 namespace Input {
@@ -48,7 +55,7 @@ constexpr std::array<std::pair<std::string_view, OrbisPadButtonDataOffset>, 16> 
 } // namespace
 
 void PadPipe::Start(GameControllers* controllers) {
-#ifdef _WIN32
+#if defined(_WIN32) || defined(__linux__)
     const char* enabled = std::getenv("SHADPS4_PAD_PIPE");
     if (!enabled || std::strcmp(enabled, "true") != 0) {
         return;
@@ -148,6 +155,60 @@ void PadPipe::ServeLoop() {
         }
         DisconnectNamedPipe(pipe);
         CloseHandle(pipe);
+    }
+#elif defined(__linux__)
+    const char* runtime_dir = std::getenv("XDG_RUNTIME_DIR");
+    const std::filesystem::path socket_path =
+        std::filesystem::path(runtime_dir && *runtime_dir ? runtime_dir : "/tmp") /
+        ("shadps4-pad-" + std::to_string(getpid()) + ".sock");
+    sockaddr_un address{};
+    address.sun_family = AF_UNIX;
+    if (socket_path.native().size() >= sizeof(address.sun_path)) {
+        LOG_ERROR(Input, "Pad pipe path is too long: {}", socket_path.string());
+        return;
+    }
+    std::strncpy(address.sun_path, socket_path.c_str(), sizeof(address.sun_path) - 1);
+    const int listener = socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
+    unlink(address.sun_path);
+    const mode_t previous_mask = umask(0077);
+    const bool bound = listener >= 0 &&
+                       bind(listener, reinterpret_cast<sockaddr*>(&address), sizeof(address)) == 0;
+    umask(previous_mask);
+    if (!bound || listen(listener, 1) != 0) {
+        LOG_ERROR(Input, "Pad pipe could not be created at {}: {}", socket_path.string(), errno);
+        if (listener >= 0) {
+            close(listener);
+        }
+        return;
+    }
+    LOG_INFO(Input, "Pad pipe listening on {}", socket_path.string());
+    while (true) {
+        const int client = accept4(listener, nullptr, nullptr, SOCK_CLOEXEC);
+        if (client < 0) {
+            continue;
+        }
+        std::string pending;
+        std::array<char, 512> buffer;
+        ssize_t read_size;
+        while ((read_size = read(client, buffer.data(), buffer.size())) > 0) {
+            pending.append(buffer.data(), static_cast<size_t>(read_size));
+            for (auto end = pending.find('\n'); end != std::string::npos;
+                 end = pending.find('\n')) {
+                auto line = pending.substr(0, end);
+                pending.erase(0, end + 1);
+                if (!line.empty() && line.back() == '\r') {
+                    line.pop_back();
+                }
+                if (line.empty()) {
+                    continue;
+                }
+                const auto reply = HandleCommand(line) + "\n";
+                if (send(client, reply.data(), reply.size(), MSG_NOSIGNAL) < 0) {
+                    break;
+                }
+            }
+        }
+        close(client);
     }
 #endif
 }

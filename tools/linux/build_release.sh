@@ -44,7 +44,8 @@ if [[ "$container" == auto ]]; then
     fi
 fi
 
-build="$root/build-linux-release"
+# The container sees the source as /src, so it gets a build folder of its own.
+build="${CROSSCREASE_BUILD_DIR:-$root/build-linux-release}"
 binary="$root/artifacts/linux/shadps4"
 
 if [[ "$container" != none ]]; then
@@ -53,6 +54,7 @@ if [[ "$container" != none ]]; then
     user_args=(--user "$(id -u):$(id -g)")
     [[ "$container" == podman ]] && user_args=(--userns=keep-id)
     "$container" run --rm "${user_args[@]}" -v "$root:/src" -w /src \
+        -e CROSSCREASE_BUILD_DIR=/src/build-linux-container \
         -e GIT_CONFIG_COUNT=1 -e GIT_CONFIG_KEY_0=safe.directory -e GIT_CONFIG_VALUE_0='*' \
         "$image" tools/linux/build_release.sh --container none --no-package --jobs "$jobs"
 else

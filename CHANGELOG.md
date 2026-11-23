@@ -12,6 +12,9 @@ Changes to CrossCrease NHL 17 releases. Versions follow [semantic versioning](ht
   `play` and `rename` commands as `crosscrease-nhl17.exe`. `tools\package_release.ps1 -LinuxRuntime`
   adds the package to the release, its checksums and the feed as `runtime-linux-x64`, which
   Windows launchers ignore. See `documents/linux-runtime.md`.
+- Developer pad control on Linux: with `SHADPS4_PAD_PIPE=true` the emulator listens on the Unix socket
+  `$XDG_RUNTIME_DIR/shadps4-pad-<pid>.sock` (owner only), with the same commands as the Windows
+  named pipe, so test automation can press buttons without window focus. Windows is unchanged.
 
 ## 0.4.11 — Lighter graphics work for slower PCs, 720p option
 

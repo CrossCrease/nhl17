@@ -14,8 +14,9 @@ namespace Input {
 class GameControllers;
 
 // Opt-in local pad control (SHADPS4_PAD_PIPE=true): a named pipe per emulator process,
-// \\.\pipe\shadps4-pad-<pid>, that presses pad 1 buttons without window focus. The pressed
-// buttons also drive emulator overlays (ImGui gamepad navigation).
+// \\.\pipe\shadps4-pad-<pid> on Windows and $XDG_RUNTIME_DIR/shadps4-pad-<pid>.sock (a Unix
+// socket only the user can open) on Linux, that presses pad 1 buttons without window focus. The
+// pressed buttons also drive emulator overlays (ImGui gamepad navigation).
 class PadPipe {
 public:
     void Start(GameControllers* controllers);

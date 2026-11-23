@@ -77,7 +77,7 @@ tools/linux/build_release.sh --server-address nhl17.crosscrease.com
 ```
 
 It needs `podman` or `docker`, builds the image from `tools/linux/Containerfile`, compiles into
-`build-linux-release/`, writes the stripped emulator to `artifacts/linux/shadps4` and the package with
+`build-linux-container/` (`build-linux-release/` with `--container none`), writes the stripped emulator to `artifacts/linux/shadps4` and the package with
 its `.sha256` file to `artifacts/release-linux/<version>/`. The online files come from the Blaze
 project's player pack (`--online-directory`, default `../blaze/.../NHL17/PS4/v1.08/Player`).
 `--container none` uses the host's tools instead (Ubuntu 24.04 with the packages in the Containerfile;
@@ -107,9 +107,42 @@ above.
 
 ## Tested and untested
 
-See the CHANGELOG entry for the current state. Known differences from Windows:
+Tested (2026-11-23, WSL 2 Ubuntu 24.04 on Windows 11, no GPU: Mesa llvmpipe, the CPU Vulkan driver):
 
-- The developer pad pipe (`SHADPS4_PAD_PIPE`) exists on Windows only; on Linux the variable does nothing.
+- `tools/linux/build_release.sh --container none` builds from a clean checkout of `linux-build`; the
+  binary needs only glibc 2.38 and `libudev`, `libuuid`, `libcap` besides the libraries SDL loads at
+  run time.
+- `package_linux.py` builds the package twice byte for byte the same; `package_release.ps1
+  -LinuxRuntime` builds the release with both packages, checksums and feed entries; the Windows-built
+  tarball keeps the executable bits and the LF start program.
+- From the extracted package, `tools/crosscrease-nhl17 play` starts update 1.08 with the compatibility
+  and trust patches (window title `NHL® 17 <01.08>`), the game plays the EA Sports intro and the
+  in-engine attract sequence (about 20 fps on llvmpipe), and a Cross press through the pad socket
+  opens the title screen ("PRESS ⊗"); a second press opens the first menu (the EULA of a new profile).
+  It runs 10+ minutes without errors, and closing
+  the start program (SIGTERM) closes the game and restores `config.json` / `users.json`. A crash writes
+  `user/log/crash.txt` (`kind=assert`).
+- llvmpipe offers only 2 GiB of sparse address space, but the emulator's GPU memory arenas are 4 GiB,
+  so on llvmpipe the shipped binary stops after about 10 s with `ErrorOutOfDeviceMemory`. The runs
+  above used a test build with 2 GiB arenas (not committed). GPU drivers report far larger limits;
+  this is the same on Windows and not a Linux problem, but drivers without large sparse buffers
+  (llvmpipe, Intel hasvk) cannot run the game.
+
+Not tested yet:
+
+- A real GPU: AMD/RADV, Intel/ANV, NVIDIA, and frame rates (the player who reported 60 fps natively
+  used their own v0.4.10 build on an RX 7600).
+- Steam Deck / SteamOS (glibc and Python versions, Gaming Mode), Bazzite, Wayland without XWayland.
+- Online sign-in, matches and `rename` against a server, controllers (SDL gamepad input), audio.
+- The container build (`--container podman|docker`); only the same commands on a WSL host ran.
+
+Known differences from Windows:
+
+- The developer pad pipe (`SHADPS4_PAD_PIPE=true`, set by the start program) is a Unix socket on Linux,
+  `$XDG_RUNTIME_DIR/shadps4-pad-<pid>.sock` (only the user can open it), with the same line protocol
+  as the Windows named pipe (`cross 1`, `cross 0`, ... answered with `OK`). `logs/online.pid` names the
+  game process. `tools/control_nhl17.ps1` is Windows-only; on Linux any program that writes lines to
+  the socket works.
 - A crash the emulator catches is reported through its assert path (`kind=assert` in `crash.txt`); on
   Windows unhandled exceptions are reported as `kind=exception`.
 - Visual glitches seen on AMD with RADV happen in native builds too; they are a separate driver problem
