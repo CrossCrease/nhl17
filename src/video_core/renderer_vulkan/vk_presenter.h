@@ -65,6 +65,10 @@ public:
         return window;
     }
 
+    Scheduler::RecordingStats GetRecordingStats() const noexcept {
+        return draw_scheduler.GetRecordingStats();
+    }
+
     Rasterizer& GetRasterizer() const {
         return *rasterizer.get();
     }

@@ -417,18 +417,25 @@ void VideoOutDriver::PresentThread(std::stop_token token) {
                                                      .count();
                         sample_late_frames += frame_ms > target_ms * 1.5;
                         if (sample_ms >= 1000.0) {
+                            static Vulkan::Scheduler::RecordingStats last_recording{};
+                            const auto recording = presenter->GetRecordingStats();
+                            const u64 recording_syncs = recording.syncs - last_recording.syncs;
+                            const u64 recorded_commands =
+                                recording.commands - last_recording.commands;
+                            last_recording = recording;
                             LOG_INFO(
                                 Lib_VideoOut,
                                 "Frame stats: frames={} elapsed_ms={:.3f} fps={:.2f} "
                                 "min_ms={:.3f} max_ms={:.3f} at_ms={:.3f} flip_rate={} "
                                 "late_frames={} empty_slots={} wakeup_max_ms={:.3f} "
-                                "present_max_ms={:.3f}",
+                                "present_max_ms={:.3f} recording_syncs={} recorded_commands={}",
                                 sample_frames, sample_ms, sample_frames * 1000.0 / sample_ms,
                                 shortest_ms, longest_ms,
                                 std::chrono::duration<double, std::milli>(now.time_since_epoch())
                                     .count(),
                                 main_port.flip_rate, sample_late_frames, sample_empty_slots,
-                                worst_wakeup_ms, worst_present_ms);
+                                worst_wakeup_ms, worst_present_ms, recording_syncs,
+                                recorded_commands);
                             sample_ms = 0.0;
                             shortest_ms = std::numeric_limits<double>::max();
                             longest_ms = 0.0;

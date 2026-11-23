@@ -133,8 +133,13 @@ void Runtime::CopyBuffer(const VideoCore::Buffer* src, const VideoCore::Buffer* 
         FlushBarriers();
     }
 
-    const auto cmdbuf = scheduler.CommandBuffer();
-    cmdbuf.copyBuffer(src->Handle(), dst->Handle(), copies);
+    scheduler.Reserve(copies.size_bytes() + 64);
+    const auto* regions = scheduler.StreamCopy(copies.data(), copies.size());
+    const u32 num_regions = static_cast<u32>(copies.size());
+    scheduler.Record([src_buffer = src->Handle(), dst_buffer = dst->Handle(), regions,
+                      num_regions](vk::CommandBuffer cmdbuf) {
+        cmdbuf.copyBuffer(src_buffer, dst_buffer, num_regions, regions);
+    });
 
     for (const auto& copy : copies) {
         AccessBuffer(src, copy.srcOffset, copy.size, vk::PipelineStageFlagBits2::eCopy,
@@ -151,8 +156,9 @@ void Runtime::FillBuffer(const VideoCore::Buffer* dst, u64 offset, u64 size, u32
         FlushBarriers();
     }
 
-    const auto cmdbuf = scheduler.CommandBuffer();
-    cmdbuf.fillBuffer(dst->Handle(), offset, size, value);
+    scheduler.Record([dst_buffer = dst->Handle(), offset, size, value](vk::CommandBuffer cmdbuf) {
+        cmdbuf.fillBuffer(dst_buffer, offset, size, value);
+    });
 
     AccessBuffer(dst, offset, size, vk::PipelineStageFlagBits2::eClear,
                  vk::AccessFlagBits2::eTransferWrite);
@@ -165,8 +171,9 @@ void Runtime::InlineData(VideoCore::Buffer* dst, u64 offset, u32 value) {
         FlushBarriers();
     }
 
-    const auto cmdbuf = scheduler.CommandBuffer();
-    cmdbuf.updateBuffer(dst->Handle(), offset, sizeof(value), &value);
+    scheduler.Record([dst_buffer = dst->Handle(), offset, value](vk::CommandBuffer cmdbuf) {
+        cmdbuf.updateBuffer(dst_buffer, offset, sizeof(value), &value);
+    });
 
     AccessBuffer(dst, offset, sizeof(value), vk::PipelineStageFlagBits2::eCopy,
                  vk::AccessFlagBits2::eTransferWrite);
@@ -907,8 +914,23 @@ void Runtime::FlushBarriers() {
     }
 
     scheduler.EndRendering();
-    const auto cmdbuf = scheduler.CommandBuffer();
-    cmdbuf.pipelineBarrier2(dep_info);
+    if (scheduler.IsThreaded()) {
+        scheduler.Reserve(image_barriers.size() * sizeof(vk::ImageMemoryBarrier2) + 64);
+        const auto* barriers = scheduler.StreamCopy(image_barriers.data(), image_barriers.size());
+        const u32 num_barriers = static_cast<u32>(image_barriers.size());
+        const bool has_memory_barrier = dep_info.memoryBarrierCount != 0;
+        scheduler.Record([memory_barrier = memory_barrier, has_memory_barrier, barriers,
+                          num_barriers](vk::CommandBuffer cmdbuf) {
+            cmdbuf.pipelineBarrier2(vk::DependencyInfo{
+                .memoryBarrierCount = has_memory_barrier ? 1U : 0U,
+                .pMemoryBarriers = has_memory_barrier ? &memory_barrier : nullptr,
+                .imageMemoryBarrierCount = num_barriers,
+                .pImageMemoryBarriers = num_barriers ? barriers : nullptr,
+            });
+        });
+    } else {
+        scheduler.CommandBuffer().pipelineBarrier2(dep_info);
+    }
 
     memory_barrier.srcStageMask = vk::PipelineStageFlagBits2::eNone;
     memory_barrier.srcAccessMask = vk::AccessFlagBits2::eNone;

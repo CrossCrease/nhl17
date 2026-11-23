@@ -14,6 +14,14 @@ Changes to CrossCrease NHL 17 releases. Versions follow [semantic versioning](ht
   kernel call and under Proton/Wine it also goes through the Windows-to-Linux translation, so
   this saves about 100,000 such calls per second in an Overhead match. On the NVIDIA test PC the
   time to record a draw changed only from 3.40 to 3.36 µs.
+- Performance: draw, dispatch, barrier and buffer-copy commands are now recorded into Vulkan on
+  a thread of their own (`shadPS4:GpuCommandRecorder`), so the graphics driver's recording cost
+  leaves the GPU command thread. Other recording waits for that thread first, so it stays in
+  order. In an Overhead CPU-vs-CPU match on the NVIDIA test PC the time to record a draw fell
+  from 3.36 to 2.98 µs and the GPU command thread's busy time from 439 to 413 ms per second.
+  The gain should be larger under Proton, where every Vulkan call also passes through Wine (not
+  measured). `SHADPS4_THREADED_RECORDING=0` turns it off. Frame statistics now also report
+  `recording_syncs` (waits for the recording thread) and `recorded_commands`.
 - Diagnostics: `SHADPS4_PROFILE_SCOPES=1` also counts GPU memory allocations
   (`ArenaMakeResident`, `ArenaBindSparse`, `CreateVkBuffer`, `CreateVkImage`) and the extra
   submissions made for readback snapshots (`FlushOnFence`, `FlushSnapshotHit`).
