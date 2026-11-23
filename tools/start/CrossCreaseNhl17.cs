@@ -2,7 +2,7 @@
 // launcher runs it for Play and for renaming an online ID:
 //
 //   crosscrease-nhl17 play -Game <eboot.bin> -DataDirectory <folder> [-ServerAddress <host>] [-OnlineId <id>] [-BaseOnly]
-//                          [-Resolution 900p|1080p|1440p] [-FrameRate 60|120]
+//                          [-Resolution 720p|900p|1080p|1440p] [-FrameRate 60|120]
 //   crosscrease-nhl17 rename -OnlineId <id> -NewOnlineId <id> [-ServerAddress <host>]
 //
 // "play" does what tools\run_nhl17_online.ps1 (with run_nhl17.ps1) does for a player's data folder, and
@@ -52,7 +52,7 @@ namespace CrossCrease.Nhl17
             if (command == "rename") return Rename(args);
             if (command == "play") return Play(args);
             const string usage = "Usage:\n  crosscrease-nhl17 play -Game <eboot.bin> -DataDirectory <folder> [-ServerAddress <host>] [-OnlineId <id>] [-BaseOnly]\n" +
-                "                         [-Resolution 900p|1080p|1440p] [-FrameRate 60|120]\n" +
+                "                         [-Resolution 720p|900p|1080p|1440p] [-FrameRate 60|120]\n" +
                 "  crosscrease-nhl17 rename -OnlineId <id> -NewOnlineId <id> [-ServerAddress <host>]";
             Console.Error.WriteLine(usage);
             return 2;
@@ -194,7 +194,7 @@ namespace CrossCrease.Nhl17
             bool allowMultipleInstances = options.ContainsKey("AllowMultipleInstances");
             // Graphics options, as in run_nhl17.ps1: 900p is the game's own render resolution.
             string resolution = (Option(options, "Resolution") ?? "900p").ToLowerInvariant();
-            if (Array.IndexOf(new[] { "900p", "1080p", "1440p" }, resolution) < 0) throw new Failure("Invalid resolution: " + resolution + " (use 900p, 1080p or 1440p).");
+            if (Array.IndexOf(new[] { "720p", "900p", "1080p", "1440p" }, resolution) < 0) throw new Failure("Invalid resolution: " + resolution + " (use 720p, 900p, 1080p or 1440p).");
             string frameRateText = Option(options, "FrameRate") ?? "60";
             if (frameRateText != "60" && frameRateText != "120") throw new Failure("Invalid frame rate: " + frameRateText + " (use 60 or 120).");
             int frameRate = int.Parse(frameRateText, CultureInfo.InvariantCulture);

@@ -3,10 +3,16 @@
 
 #pragma once
 
+#include <atomic>
 #include <condition_variable>
+#include <cstring>
+#include <memory>
 #include <mutex>
 #include <thread>
 #include <queue>
+#include <vector>
+
+#include "common/assert.h"
 
 #include "common/interval_set.h"
 #include "common/unique_function.h"
@@ -167,6 +173,21 @@ struct DynamicState {
 
     /// Commits the dynamic state to the provided command buffer.
     void Commit(const Instance& instance, const vk::CommandBuffer& cmdbuf);
+
+    /// Clears the dirty flags exactly as Commit does, without recording anything. Used after a
+    /// copy of this state was handed to the recording thread.
+    void MarkCommitted(const Instance& instance);
+
+    template <typename Cmd>
+    void CommitTo(const Instance& instance, const Cmd& cmdbuf);
+
+    /// Returns true when Commit would have anything to record.
+    bool IsDirty() const noexcept {
+        static_assert(sizeof(dirty_state) <= sizeof(u64));
+        u64 bits = 0;
+        std::memcpy(&bits, &dirty_state, sizeof(dirty_state));
+        return bits != 0;
+    }
 
     /// Invalidates all dynamic state to be flushed into the next command buffer.
     void Invalidate() {
@@ -356,12 +377,112 @@ struct DynamicState {
     }
 };
 
+/// A block of recorded commands that the recording thread replays into a Vulkan command buffer.
+/// Commands and the data they point to are stored inline, so recording allocates nothing.
+class CommandChunk final {
+public:
+    static constexpr size_t Capacity = 256 * 1024;
+
+    CommandChunk() = default;
+    ~CommandChunk() {
+        Reset();
+    }
+    CommandChunk(const CommandChunk&) = delete;
+    CommandChunk& operator=(const CommandChunk&) = delete;
+
+    /// Number of bytes still free, ignoring alignment.
+    [[nodiscard]] size_t Free() const noexcept {
+        return Capacity - offset;
+    }
+
+    [[nodiscard]] bool Empty() const noexcept {
+        return first == nullptr;
+    }
+
+    [[nodiscard]] u32 Count() const noexcept {
+        return count;
+    }
+
+    /// Returns aligned storage inside the chunk, or nullptr when it does not fit.
+    void* Allocate(size_t size, size_t align) noexcept {
+        const size_t start = (offset + align - 1) & ~(align - 1);
+        if (start + size > Capacity) {
+            return nullptr;
+        }
+        offset = start + size;
+        return storage.get() + start;
+    }
+
+    template <typename F>
+    bool Record(F&& func) {
+        using Type = TypedCommand<std::decay_t<F>>;
+        void* const ptr = Allocate(sizeof(Type), alignof(Type));
+        if (!ptr) {
+            return false;
+        }
+        Command* const command = new (ptr) Type(std::forward<F>(func));
+        if (last) {
+            last->next = command;
+        } else {
+            first = command;
+        }
+        last = command;
+        ++count;
+        return true;
+    }
+
+    /// Runs the commands. cmdbuf is read again for every command: a submit command switches
+    /// it to the next command buffer.
+    void Execute(const vk::CommandBuffer& cmdbuf) const {
+        for (const Command* command = first; command; command = command->next) {
+            command->Execute(cmdbuf);
+        }
+    }
+
+    void Reset() noexcept {
+        for (Command* command = first; command;) {
+            Command* const next = command->next;
+            command->~Command();
+            command = next;
+        }
+        first = last = nullptr;
+        offset = 0;
+        count = 0;
+    }
+
+private:
+    struct Command {
+        virtual ~Command() = default;
+        virtual void Execute(vk::CommandBuffer cmdbuf) const = 0;
+        Command* next{};
+    };
+
+    template <typename F>
+    struct TypedCommand final : Command {
+        template <typename G>
+        explicit TypedCommand(G&& func_) : func{std::forward<G>(func_)} {}
+        void Execute(vk::CommandBuffer cmdbuf) const override {
+            func(cmdbuf);
+        }
+        F func;
+    };
+
+    std::unique_ptr<u8[]> storage{new u8[Capacity]};
+    size_t offset{};
+    Command* first{};
+    Command* last{};
+    u32 count{};
+};
+
 using SessionFunc = Common::UniqueFunction<void>;
 using SubmitFunc = Common::UniqueFunction<void, SubmitInfo&>;
 
 class Scheduler {
 public:
-    explicit Scheduler(const Instance& instance);
+    /// With threaded_recording, commands recorded through Record() are replayed into the Vulkan
+    /// command buffer by a separate thread, so the driver's recording cost leaves the caller's
+    /// thread. CommandBuffer() first waits for that thread, so direct recording stays correct.
+    explicit Scheduler(const Instance& instance, bool threaded_recording = false);
     ~Scheduler();
 
     /// Sends the current execution context to the GPU
@@ -413,9 +534,87 @@ public:
         return dynamic_state;
     }
 
-    /// Returns the current command buffer.
-    vk::CommandBuffer CommandBuffer() const {
-        return sessions.back().primary;
+    /// Returns the current command buffer for direct recording. Waits until every command
+    /// passed to Record() has been recorded into it. Callers keep using the returned buffer
+    /// while calling code that uses Record(), so from here on Record() runs immediately, in
+    /// order with the direct recording, until ResumeThreadedRecording().
+    vk::CommandBuffer CommandBuffer() {
+        if (threaded && !direct_mode) {
+            SyncRecording();
+            direct_mode = true;
+            direct_entries.store(direct_entries.load(std::memory_order_relaxed) + 1,
+                                 std::memory_order_relaxed);
+        }
+        return CurrentPrimary();
+    }
+
+    /// Hands Record() commands to the recording thread again. Called where no direct
+    /// recording can still be in progress: at the start of a draw or dispatch.
+    void ResumeThreadedRecording() noexcept {
+        direct_mode = false;
+    }
+
+    /// Whether Record() currently hands commands to the recording thread.
+    [[nodiscard]] bool IsThreaded() const noexcept {
+        return threaded && !direct_mode;
+    }
+
+    /// Records a command. func(vk::CommandBuffer) runs later on the recording thread, in order
+    /// with everything else recorded on this scheduler; it must capture what it uses by value
+    /// or point to data copied with StreamCopy(). Without threaded recording it runs now.
+    template <typename F>
+    void Record(F&& func) {
+        if (!IsThreaded()) {
+            func(CurrentPrimary());
+            return;
+        }
+        if (!chunk->Record(func)) {
+            DispatchChunk();
+            const bool recorded = chunk->Record(func);
+            ASSERT(recorded);
+        }
+        recorded_commands.store(recorded_commands.load(std::memory_order_relaxed) + 1,
+                                std::memory_order_relaxed);
+        if (chunk->Count() >= DispatchThreshold) {
+            DispatchChunk();
+        }
+    }
+
+    /// Makes sure the next bytes of StreamCopy() data and the Record() call that uses them land
+    /// in the same chunk. Call it before StreamCopy().
+    void Reserve(size_t bytes) {
+        if (IsThreaded() && chunk->Free() < bytes + 2048) {
+            DispatchChunk();
+        }
+    }
+
+    /// Copies data next to the recorded commands; the pointer stays valid until the next
+    /// Record() call has run. Without threaded recording the original data is returned.
+    template <typename T>
+    const T* StreamCopy(const T* data, size_t count) {
+        if (!IsThreaded() || count == 0) {
+            return data;
+        }
+        void* const ptr = chunk->Allocate(sizeof(T) * count, alignof(T));
+        ASSERT_MSG(ptr, "Recording data does not fit; call Reserve first");
+        std::memcpy(ptr, data, sizeof(T) * count);
+        return static_cast<const T*>(ptr);
+    }
+
+    /// Waits until the recording thread has recorded everything passed to Record().
+    void SyncRecording();
+
+    /// Counters for frame statistics: direct recordings that had to wait for the recording
+    /// thread, and commands recorded through Record(), counted since start.
+    struct RecordingStats {
+        u64 syncs;
+        u64 commands;
+        u64 direct;
+    };
+    RecordingStats GetRecordingStats() const noexcept {
+        return {sync_count.load(std::memory_order_relaxed),
+                recorded_commands.load(std::memory_order_relaxed),
+                direct_entries.load(std::memory_order_relaxed)};
     }
 
     /// Returns the current command buffer tick.
@@ -454,14 +653,33 @@ public:
         priority_pending_ops_cv.notify_one();
     }
 
-    static std::mutex submit_mutex;
+    /// Serializes use of the graphics queue. Recursive: code run during a submission may take
+    /// it again (sparse binding in the submit callback).
+    static std::recursive_mutex submit_mutex;
 
 private:
     void EndSession();
 
     void SubmitExecution(SubmitInfo& info);
 
+    /// Threaded recording: prepares the submission here and hands the end of the command
+    /// buffer, the queue submission and the start of the next one to the recording thread.
+    void SubmitThreaded(SubmitInfo& info);
+
+    /// Recording thread side of SubmitThreaded.
+    void RecorderSubmit(SubmitInfo info, vk::CommandBuffer upload);
+
+    /// The primary command buffer being recorded. With threaded recording it belongs to the
+    /// recording thread; other threads may use it only after SyncRecording().
+    vk::CommandBuffer CurrentPrimary() const noexcept {
+        return threaded ? recorder_primary : sessions.back().primary;
+    }
+
     void PriorityPendingOpsThread(std::stop_token stoken);
+
+    void DispatchChunk();
+
+    void RecordingThread(std::stop_token stoken);
 
 private:
     const Instance& instance;
@@ -489,6 +707,27 @@ private:
     RenderState render_state;
     bool is_rendering = false;
     tracy::VkCtxScope* profiler_scope{};
+
+    // Threaded recording. Commands are handed over in chunks of up to this many.
+    static constexpr u32 DispatchThreshold = 384;
+    bool threaded{};
+    bool direct_mode{};
+    vk::CommandBuffer recorder_primary{};
+    CommandPool upload_pool;
+    std::unique_ptr<CommandChunk> chunk;
+    std::mutex chunk_mutex;
+    std::condition_variable_any chunk_cv;
+    std::queue<std::unique_ptr<CommandChunk>> chunk_queue;
+    std::vector<std::unique_ptr<CommandChunk>> free_chunks;
+    u64 dispatched_chunks{};
+    std::atomic<u64> completed_chunks{};
+    std::atomic<bool> waiting_for_recording{};
+    std::mutex done_mutex;
+    std::condition_variable done_cv;
+    std::atomic<u64> sync_count{};
+    std::atomic<u64> recorded_commands{};
+    std::atomic<u64> direct_entries{};
+    std::jthread recording_thread;
 };
 
 } // namespace Vulkan

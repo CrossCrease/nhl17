@@ -16,8 +16,9 @@ param(
     [string]$DataDirectory = '',
     [switch]$AllowMultipleInstances,
     [switch]$BaseOnly,
-    # Render resolution: 900p is the game's own (1600x900 scaled to 1080p); 1080p and 1440p patch it.
-    [ValidateSet('900p', '1080p', '1440p')][string]$Resolution = '900p',
+    # Render resolution: 900p is the game's own (1600x900 scaled to 1080p); 720p, 1080p and 1440p patch
+    # it (720p for slower graphics cards).
+    [ValidateSet('720p', '900p', '1080p', '1440p')][string]$Resolution = '900p',
     # Emulated display refresh. 120 lets offline gameplay run at 120 fps; online matches stay near 60.
     [ValidateSet(60, 120)][int]$FrameRate = 60
 )

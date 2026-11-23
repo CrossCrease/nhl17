@@ -187,6 +187,7 @@ void Rasterizer::Draw(bool is_indexed, u32 index_offset) {
     PERFORMANCE_SCOPE("RecordDraw");
     RENDERER_TRACE;
 
+    scheduler.ResumeThreadedRecording();
     scheduler.PopPendingOperations();
 
     if (!FilterDraw()) {
@@ -222,15 +223,19 @@ void Rasterizer::Draw(bool is_indexed, u32 index_offset) {
     const auto& fetch_shader = pipeline->GetFetchShader();
     const auto [vertex_offset, instance_offset] = GetDrawOffsets(regs, vs_info, fetch_shader);
 
-    const auto cmdbuf = scheduler.CommandBuffer();
     BindGraphicsPipeline(pipeline);
 
+    const u32 num_indices = regs.num_indices;
+    const u32 num_instances = regs.num_instances.NumInstances();
     if (is_indexed) {
-        cmdbuf.drawIndexed(regs.num_indices, regs.num_instances.NumInstances(), 0,
-                           s32(vertex_offset), instance_offset);
+        scheduler.Record([=](vk::CommandBuffer cmdbuf) {
+            cmdbuf.drawIndexed(num_indices, num_instances, 0, s32(vertex_offset),
+                               instance_offset);
+        });
     } else {
-        cmdbuf.draw(regs.num_indices, regs.num_instances.NumInstances(), vertex_offset,
-                    instance_offset);
+        scheduler.Record([=](vk::CommandBuffer cmdbuf) {
+            cmdbuf.draw(num_indices, num_instances, vertex_offset, instance_offset);
+        });
     }
     DebugState.IncDrawCall();
 
@@ -242,6 +247,7 @@ void Rasterizer::DrawIndirect(bool is_indexed, VAddr arg_address, u32 offset, u3
                               u16 instance_sgpr_offset) {
     RENDERER_TRACE;
 
+    scheduler.ResumeThreadedRecording();
     scheduler.PopPendingOperations();
 
     if (!FilterDraw()) {
@@ -274,8 +280,8 @@ void Rasterizer::DrawIndirect(bool is_indexed, VAddr arg_address, u32 offset, u3
     needs_barrier |= runtime.IsBufferAccessed(buffer, base, size);
     bound_buffers.emplace_back(buffer, base, size, vk::AccessFlagBits2::eIndirectCommandRead);
 
-    const VideoCore::Buffer* count_buffer;
-    u64 count_offset;
+    const VideoCore::Buffer* count_buffer{};
+    u64 count_offset{};
     if (count_address != 0) {
         std::tie(count_buffer, count_offset) = buffer_cache.ObtainBuffer(count_address, 4);
         needs_barrier |= runtime.IsBufferAccessed(count_buffer, count_offset, 4);
@@ -291,30 +297,34 @@ void Rasterizer::DrawIndirect(bool is_indexed, VAddr arg_address, u32 offset, u3
     UpdateDynamicState(pipeline, is_indexed);
     scheduler.BeginRendering(state);
 
-    const auto cmdbuf = scheduler.CommandBuffer();
     BindGraphicsPipeline(pipeline);
 
+    const vk::Buffer arg_buffer = buffer->Handle();
+    const vk::Buffer count_handle = count_address != 0 ? count_buffer->Handle() : vk::Buffer{};
+    const bool has_count = count_address != 0;
     if (is_indexed) {
         ASSERT(sizeof(VkDrawIndexedIndirectCommand) == stride);
-
-        if (count_address != 0) {
-            cmdbuf.drawIndexedIndirectCount(buffer->Handle(), base, count_buffer->Handle(),
-                                            count_offset, max_count, stride);
-        } else {
-            cmdbuf.drawIndexedIndirect(buffer->Handle(), base, max_count, stride);
-        }
-        DebugState.IncDrawCall();
     } else {
         ASSERT(sizeof(VkDrawIndirectCommand) == stride);
-
-        if (count_address != 0) {
-            cmdbuf.drawIndirectCount(buffer->Handle(), base, count_buffer->Handle(), count_offset,
-                                     max_count, stride);
-        } else {
-            cmdbuf.drawIndirect(buffer->Handle(), base, max_count, stride);
-        }
-        DebugState.IncDrawCall();
     }
+    scheduler.Record([=](vk::CommandBuffer cmdbuf) {
+        if (is_indexed) {
+            if (has_count) {
+                cmdbuf.drawIndexedIndirectCount(arg_buffer, base, count_handle, count_offset,
+                                                max_count, stride);
+            } else {
+                cmdbuf.drawIndexedIndirect(arg_buffer, base, max_count, stride);
+            }
+        } else {
+            if (has_count) {
+                cmdbuf.drawIndirectCount(arg_buffer, base, count_handle, count_offset, max_count,
+                                         stride);
+            } else {
+                cmdbuf.drawIndirect(arg_buffer, base, max_count, stride);
+            }
+        }
+    });
+    DebugState.IncDrawCall();
 
     ResetBindings(false);
 }
@@ -323,6 +333,7 @@ void Rasterizer::DispatchDirect() {
     PERFORMANCE_SCOPE("RecordDispatch");
     RENDERER_TRACE;
 
+    scheduler.ResumeThreadedRecording();
     scheduler.PopPendingOperations();
 
     const auto& cs_program = liverpool->GetCsRegs();
@@ -365,9 +376,14 @@ void Rasterizer::DispatchDirect() {
     }
     pipeline->BindResources(set_writes, push_data);
 
-    const auto cmdbuf = scheduler.CommandBuffer();
-    cmdbuf.bindPipeline(vk::PipelineBindPoint::eCompute, pipeline->Handle());
-    cmdbuf.dispatch(cs_program.dim_x, cs_program.dim_y, cs_program.dim_z);
+    const vk::Pipeline handle = pipeline->Handle();
+    const u32 dim_x = cs_program.dim_x;
+    const u32 dim_y = cs_program.dim_y;
+    const u32 dim_z = cs_program.dim_z;
+    scheduler.Record([=](vk::CommandBuffer cmdbuf) {
+        cmdbuf.bindPipeline(vk::PipelineBindPoint::eCompute, handle);
+        cmdbuf.dispatch(dim_x, dim_y, dim_z);
+    });
     DebugState.IncDispatch();
 
     ResetBindings(true);
@@ -376,6 +392,7 @@ void Rasterizer::DispatchDirect() {
 void Rasterizer::DispatchIndirect(VAddr address, u32 offset, u32 size) {
     RENDERER_TRACE;
 
+    scheduler.ResumeThreadedRecording();
     scheduler.PopPendingOperations();
 
     const auto& cs_program = liverpool->GetCsRegs();
@@ -399,9 +416,12 @@ void Rasterizer::DispatchIndirect(VAddr address, u32 offset, u32 size) {
     scheduler.EndRendering();
     pipeline->BindResources(set_writes, push_data);
 
-    const auto cmdbuf = scheduler.CommandBuffer();
-    cmdbuf.bindPipeline(vk::PipelineBindPoint::eCompute, pipeline->Handle());
-    cmdbuf.dispatchIndirect(buffer->Handle(), base);
+    const vk::Pipeline handle = pipeline->Handle();
+    const vk::Buffer arg_buffer = buffer->Handle();
+    scheduler.Record([=](vk::CommandBuffer cmdbuf) {
+        cmdbuf.bindPipeline(vk::PipelineBindPoint::eCompute, handle);
+        cmdbuf.dispatchIndirect(arg_buffer, base);
+    });
     DebugState.IncDispatch();
 
     ResetBindings(true);
@@ -431,6 +451,7 @@ void Rasterizer::OnFence() {
     // just wrote. Submitting now copies those pages at this point, so such a write waits only
     // for the work before the fence instead of draining everything recorded after it.
     if (buffer_cache.HasPendingReadbackSnapshots()) {
+        PERFORMANCE_SCOPE("FlushOnFence");
         scheduler.Flush();
     }
 }
@@ -475,8 +496,11 @@ void Rasterizer::BindGraphicsPipeline(const GraphicsPipeline* pipeline) {
         bound_graphics_pipeline == pipeline->Handle()) {
         return;
     }
-    scheduler.CommandBuffer().bindPipeline(vk::PipelineBindPoint::eGraphics, pipeline->Handle());
-    bound_graphics_pipeline = pipeline->Handle();
+    const vk::Pipeline handle = pipeline->Handle();
+    scheduler.Record([handle](vk::CommandBuffer cmdbuf) {
+        cmdbuf.bindPipeline(vk::PipelineBindPoint::eGraphics, handle);
+    });
+    bound_graphics_pipeline = handle;
     bound_pipeline_generation = generation;
 }
 
@@ -495,8 +519,9 @@ void Rasterizer::BindVertexBuffers(const GraphicsPipeline* pipeline) {
         if (bound_vertex_input_generation != generation ||
             !std::ranges::equal(bound_vertex_bindings, bindings) ||
             !std::ranges::equal(bound_vertex_attributes, attributes)) {
-            const auto cmdbuf = scheduler.CommandBuffer();
-            cmdbuf.setVertexInputEXT(bindings, attributes);
+            scheduler.Record([bindings, attributes](vk::CommandBuffer cmdbuf) {
+                cmdbuf.setVertexInputEXT(bindings, attributes);
+            });
             bound_vertex_bindings = bindings;
             bound_vertex_attributes = attributes;
             bound_vertex_input_generation = generation;
@@ -577,13 +602,17 @@ void Rasterizer::BindVertexBuffers(const GraphicsPipeline* pipeline) {
         host_strides.push_back(buffer.GetStride());
     }
 
-    const auto cmdbuf = scheduler.CommandBuffer();
-    const auto num_buffers = guest_buffers.size();
+    const u32 num_buffers = static_cast<u32>(guest_buffers.size());
     if (instance.IsVertexInputDynamicState()) {
-        cmdbuf.bindVertexBuffers(0, num_buffers, host_buffers.data(), host_offsets.data());
+        scheduler.Record([num_buffers, host_buffers, host_offsets](vk::CommandBuffer cmdbuf) {
+            cmdbuf.bindVertexBuffers(0, num_buffers, host_buffers.data(), host_offsets.data());
+        });
     } else {
-        cmdbuf.bindVertexBuffers2(0, num_buffers, host_buffers.data(), host_offsets.data(),
-                                  host_sizes.data(), host_strides.data());
+        scheduler.Record([num_buffers, host_buffers, host_offsets, host_sizes,
+                          host_strides](vk::CommandBuffer cmdbuf) {
+            cmdbuf.bindVertexBuffers2(0, num_buffers, host_buffers.data(), host_offsets.data(),
+                                      host_sizes.data(), host_strides.data());
+        });
     }
 }
 
@@ -622,11 +651,15 @@ void Rasterizer::BindIndexBuffer(u32 index_offset, bool is_indirect) {
         index_buffer = null_buffer->Handle();
     }
 
-    const auto cmdbuf = scheduler.CommandBuffer();
     if (instance.IsMaintenance5Supported()) {
-        cmdbuf.bindIndexBuffer2KHR(index_buffer, buffer_offset, index_buffer_size, index_type);
+        scheduler.Record([=](vk::CommandBuffer cmdbuf) {
+            cmdbuf.bindIndexBuffer2KHR(index_buffer, buffer_offset, index_buffer_size,
+                                       index_type);
+        });
     } else {
-        cmdbuf.bindIndexBuffer(index_buffer, buffer_offset, index_type);
+        scheduler.Record([=](vk::CommandBuffer cmdbuf) {
+            cmdbuf.bindIndexBuffer(index_buffer, buffer_offset, index_type);
+        });
     }
 }
 
@@ -1396,7 +1429,19 @@ void Rasterizer::UpdateDynamicState(const GraphicsPipeline* pipeline, const bool
     UpdateColorBlendingState(pipeline);
 
     auto& dynamic_state = scheduler.GetDynamicState();
-    dynamic_state.Commit(instance, scheduler.CommandBuffer());
+    if (!scheduler.IsThreaded()) {
+        dynamic_state.Commit(instance, scheduler.CommandBuffer());
+        return;
+    }
+    if (!dynamic_state.IsDirty()) {
+        return;
+    }
+    // Record from a copy, then clear the flags here the same way the commit will.
+    scheduler.Record([snapshot = dynamic_state, inst = &instance](vk::CommandBuffer cmdbuf) {
+        auto state = snapshot;
+        state.Commit(*inst, cmdbuf);
+    });
+    dynamic_state.MarkCommitted(instance);
 }
 
 void Rasterizer::UpdateViewportScissorState() const {

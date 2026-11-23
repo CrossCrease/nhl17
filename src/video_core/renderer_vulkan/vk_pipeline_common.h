@@ -60,6 +60,12 @@ public:
     using DescriptorWrites = std::vector<vk::WriteDescriptorSet>;
     void BindResources(DescriptorWrites& set_writes, const Shader::PushData& push_data) const;
 
+private:
+    void PushDescriptors(vk::PipelineBindPoint bind_point, vk::PipelineLayout layout,
+                         std::span<const vk::WriteDescriptorSet> set_writes) const;
+
+public:
+
 protected:
     [[nodiscard]] std::string GetDebugString() const;
 

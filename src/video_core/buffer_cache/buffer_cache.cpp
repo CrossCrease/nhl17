@@ -479,6 +479,7 @@ void BufferCache::EnsureResident(const Buffer* arena, u64 first_block, u64 last_
     if (bind_ranges.Empty()) {
         return;
     }
+    PERFORMANCE_SCOPE("ArenaMakeResident");
 
     const bool has_bda = instance.IsBufferDeviceAddressSupported();
     const vk::MemoryAllocateFlagsInfo alloc_flags = {
@@ -745,6 +746,7 @@ bool BufferCache::PrepareSnapshotRead(VAddr device_addr, VAddr window_start, VAd
     PERFORMANCE_SCOPE("ReadbackSnapshotHit");
     if (!scheduler.IsFree(read.tick)) {
         // Hand the recorded work to the GPU so it stays busy while the snapshot is awaited.
+        PERFORMANCE_SCOPE("FlushSnapshotHit");
         scheduler.Flush();
     }
     return true;
@@ -890,6 +892,7 @@ void BufferCache::SubmitPendingArenaBinds(Vulkan::SubmitInfo& info) {
     if (pending_binds.empty()) {
         return;
     }
+    PERFORMANCE_SCOPE("ArenaBindSparse");
 
     std::vector<vk::SparseBufferMemoryBindInfo> buffer_binds;
     buffer_binds.reserve(pending_binds.size());
@@ -919,6 +922,9 @@ void BufferCache::SubmitPendingArenaBinds(Vulkan::SubmitInfo& info) {
     };
 
     info.AddWait(signal_sema, signal_tick);
+    // Usually called during a submission, which already holds the lock; with threaded
+    // recording the submission runs this without it.
+    std::scoped_lock queue_lock{Vulkan::Scheduler::submit_mutex};
     auto submit_result = instance.GetGraphicsQueue().bindSparse(sparse_info);
     ASSERT_MSG(submit_result != vk::Result::eErrorDeviceLost, "Device lost during submit");
 

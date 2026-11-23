@@ -11,22 +11,105 @@
 
 namespace Vulkan {
 
-std::mutex Scheduler::submit_mutex;
+std::recursive_mutex Scheduler::submit_mutex;
 
-Scheduler::Scheduler(const Instance& instance)
-    : instance{instance}, work_semaphore{instance}, command_pool{instance, &work_semaphore} {
+Scheduler::Scheduler(const Instance& instance, bool threaded_recording)
+    : instance{instance}, work_semaphore{instance}, command_pool{instance, &work_semaphore},
+      threaded{threaded_recording}, upload_pool{instance, &work_semaphore} {
 #if TRACY_GPU_ENABLED
     profiler_scope = reinterpret_cast<tracy::VkCtxScope*>(std::malloc(sizeof(tracy::VkCtxScope)));
 #endif
     BeginSession();
     priority_pending_ops_thread =
         std::jthread(std::bind_front(&Scheduler::PriorityPendingOpsThread, this));
+    if (threaded) {
+        // From here on only the recording thread records into, ends, submits and begins the
+        // primary command buffers, and only it uses command_pool.
+        recorder_primary = sessions.back().primary;
+        chunk = std::make_unique<CommandChunk>();
+        recording_thread = std::jthread(std::bind_front(&Scheduler::RecordingThread, this));
+    }
 }
 
 Scheduler::~Scheduler() {
+    if (threaded) {
+        SyncRecording();
+        recording_thread.request_stop();
+        recording_thread.join();
+    }
 #if TRACY_GPU_ENABLED
     std::free(profiler_scope);
 #endif
+}
+
+void Scheduler::DispatchChunk() {
+    if (chunk->Empty()) {
+        return;
+    }
+    std::unique_ptr<CommandChunk> next;
+    {
+        std::scoped_lock lk{chunk_mutex};
+        chunk_queue.push(std::move(chunk));
+        if (!free_chunks.empty()) {
+            next = std::move(free_chunks.back());
+            free_chunks.pop_back();
+        }
+    }
+    chunk_cv.notify_one();
+    ++dispatched_chunks;
+    chunk = next ? std::move(next) : std::make_unique<CommandChunk>();
+}
+
+void Scheduler::SyncRecording() {
+    DispatchChunk();
+    const u64 target = dispatched_chunks;
+    if (completed_chunks.load(std::memory_order_acquire) >= target) {
+        return;
+    }
+    PERFORMANCE_SCOPE("SyncRecording");
+    sync_count.store(sync_count.load(std::memory_order_relaxed) + 1, std::memory_order_relaxed);
+    // The recording thread is usually only a few commands behind: spin briefly first.
+    for (u32 i = 0; i < 4096; ++i) {
+        if (completed_chunks.load(std::memory_order_acquire) >= target) {
+            return;
+        }
+        if ((i & 63) == 63) {
+            std::this_thread::yield();
+        }
+    }
+    std::unique_lock lk{done_mutex};
+    waiting_for_recording.store(true);
+    while (completed_chunks.load() < target) {
+        done_cv.wait_for(lk, std::chrono::milliseconds(1));
+    }
+    waiting_for_recording.store(false);
+}
+
+void Scheduler::RecordingThread(std::stop_token stoken) {
+    Common::SetCurrentThreadName("shadPS4:GpuCommandRecorder");
+    while (true) {
+        std::unique_ptr<CommandChunk> work;
+        {
+            std::unique_lock lk{chunk_mutex};
+            chunk_cv.wait(lk, stoken, [this] { return !chunk_queue.empty(); });
+            if (chunk_queue.empty()) {
+                return; // Stop requested and nothing left to record.
+            }
+            work = std::move(chunk_queue.front());
+            chunk_queue.pop();
+        }
+        work->Execute(recorder_primary);
+        work->Reset();
+        {
+            std::scoped_lock lk{chunk_mutex};
+            free_chunks.push_back(std::move(work));
+        }
+        completed_chunks.fetch_add(1);
+        if (waiting_for_recording.load()) {
+            std::scoped_lock lk{done_mutex};
+            done_cv.notify_one();
+        }
+    }
 }
 
 void Scheduler::BeginRendering(const RenderState& new_state) {
@@ -37,6 +120,7 @@ void Scheduler::BeginRendering(const RenderState& new_state) {
     is_rendering = true;
     render_state = new_state;
 
+    Record([render_state = render_state](vk::CommandBuffer cmdbuf) {
     std::array<vk::RenderingAttachmentInfo, 8> color_attachments;
     for (u32 i = 0; i < render_state.num_color_attachments; ++i) {
         const auto& cb = render_state.color_attachments[i];
@@ -81,7 +165,8 @@ void Scheduler::BeginRendering(const RenderState& new_state) {
         .pStencilAttachment = db.has_stencil ? &stencil_attachment : nullptr,
     };
 
-    CommandBuffer().beginRendering(rendering_info);
+    cmdbuf.beginRendering(rendering_info);
+    });
 }
 
 void Scheduler::EndRendering() {
@@ -89,7 +174,7 @@ void Scheduler::EndRendering() {
         return;
     }
     is_rendering = false;
-    CommandBuffer().endRendering();
+    Record([](vk::CommandBuffer cmdbuf) { cmdbuf.endRendering(); });
 }
 
 vk::CommandBuffer Scheduler::UploadCommandBuffer() {
@@ -100,7 +185,9 @@ vk::CommandBuffer Scheduler::UploadCommandBuffer() {
     const vk::CommandBufferBeginInfo begin_info = {
         .flags = vk::CommandBufferUsageFlagBits::eOneTimeSubmit,
     };
-    upload_cmdbuf = command_pool.Commit();
+    // A pool of its own: the recording thread may be recording into the primary command
+    // buffer at the same time, and a pool's command buffers must not be recorded concurrently.
+    upload_cmdbuf = upload_pool.Commit();
     Check(upload_cmdbuf.begin(begin_info));
     return upload_cmdbuf;
 }
@@ -135,7 +222,20 @@ void Scheduler::Wait(u64 tick) {
 
 void Scheduler::PopPendingOperations() {
     std::unique_lock lk(pending_ops_mutex);
-    work_semaphore.Refresh();
+    // This runs before every draw and dispatch. Ask the driver for the GPU's progress only when
+    // an operation is waiting for it: the query is a kernel call on some drivers and goes
+    // through a translation layer under Wine/Proton. Code that needs a fresh tick refreshes it.
+    if (pending_ops.empty()) {
+        return;
+    }
+    const u64 front_tick = pending_ops.front().gpu_tick;
+    if (!work_semaphore.IsFree(front_tick)) {
+        if (front_tick >= work_semaphore.CurrentTick()) {
+            // Waits for work that has not been submitted yet; the GPU cannot have finished it.
+            return;
+        }
+        work_semaphore.Refresh();
+    }
     while (!pending_ops.empty() && work_semaphore.IsFree(pending_ops.front().gpu_tick)) {
         pending_ops.front().callback();
         pending_ops.pop();
@@ -181,11 +281,92 @@ void Scheduler::EndSession() {
     }
 
     EndRendering();
+    if (threaded) {
+        SyncRecording();
+    }
     Check(session.primary.end());
+}
+
+void Scheduler::SubmitThreaded(SubmitInfo& info) {
+    // The callbacks may wait for the recording thread, which may be waiting for the queue
+    // lock to submit earlier work, so they run without holding it.
+    const u64 signal_value = work_semaphore.NextTick();
+    if (on_submit) {
+        on_submit(info);
+    }
+    if (on_session) {
+        on_session();
+    }
+    const vk::CommandBuffer upload = sessions.back().upload;
+    if (upload) {
+        Check(upload.end());
+    }
+    EndRendering();
+    {
+        std::scoped_lock lk{submit_mutex};
+        ImGui::Core::TextureManager::Submit();
+    }
+    info.AddSignal(work_semaphore.Handle(), signal_value);
+    sessions.clear();
+    sessions.emplace_back();
+    // The next command buffer starts without state.
+    dynamic_state.Invalidate();
+
+    // Anything recorded directly is already in the command buffer and the recording thread is
+    // idle, so the submission can always go through the queue.
+    direct_mode = false;
+    Record([this, info, upload](vk::CommandBuffer) { RecorderSubmit(info, upload); });
+    DispatchChunk();
+
+    PopPendingOperations();
+}
+
+void Scheduler::RecorderSubmit(SubmitInfo info, vk::CommandBuffer upload) {
+    Check(recorder_primary.end());
+    std::array<vk::CommandBuffer, 2> cmd_buffers;
+    u32 num_cmd_buffers = 0;
+    if (upload) {
+        cmd_buffers[num_cmd_buffers++] = upload;
+    }
+    cmd_buffers[num_cmd_buffers++] = recorder_primary;
+
+    std::array<vk::PipelineStageFlags, std::tuple_size_v<decltype(info.wait_semas)>>
+        wait_stage_masks;
+    wait_stage_masks.fill(vk::PipelineStageFlagBits::eAllCommands);
+    const vk::TimelineSemaphoreSubmitInfo timeline_si = {
+        .waitSemaphoreValueCount = info.num_wait_semas,
+        .pWaitSemaphoreValues = info.wait_ticks.data(),
+        .signalSemaphoreValueCount = info.num_signal_semas,
+        .pSignalSemaphoreValues = info.signal_ticks.data(),
+    };
+    const vk::SubmitInfo submit_info = {
+        .pNext = &timeline_si,
+        .waitSemaphoreCount = info.num_wait_semas,
+        .pWaitSemaphores = info.wait_semas.data(),
+        .pWaitDstStageMask = wait_stage_masks.data(),
+        .commandBufferCount = num_cmd_buffers,
+        .pCommandBuffers = cmd_buffers.data(),
+        .signalSemaphoreCount = info.num_signal_semas,
+        .pSignalSemaphores = info.signal_semas.data(),
+    };
+    {
+        std::scoped_lock lk{submit_mutex};
+        const auto submit_result = instance.GetGraphicsQueue().submit(submit_info, info.fence);
+        ASSERT_MSG(submit_result != vk::Result::eErrorDeviceLost, "Device lost during submit");
+    }
+
+    recorder_primary = command_pool.Commit();
+    Check(recorder_primary.begin(vk::CommandBufferBeginInfo{
+        .flags = vk::CommandBufferUsageFlagBits::eOneTimeSubmit,
+    }));
 }
 
 void Scheduler::SubmitExecution(SubmitInfo& info) {
     PERFORMANCE_SCOPE("SubmitExecution");
+    if (threaded) {
+        SubmitThreaded(info);
+        return;
+    }
     std::scoped_lock lk{submit_mutex};
     const u64 signal_value = work_semaphore.NextTick();
 
@@ -276,7 +457,48 @@ void Scheduler::PriorityPendingOpsThread(std::stop_token stoken) {
     }
 }
 
+namespace {
+/// Stands in for a command buffer when only the dirty flags of a commit should change.
+struct NullRecorder {
+#define NULL_RECORDER_OP(name)                                                                     \
+    template <typename... Args>                                                                    \
+    void name(Args&&...) const {}
+    NULL_RECORDER_OP(setViewportWithCount)
+    NULL_RECORDER_OP(setScissorWithCount)
+    NULL_RECORDER_OP(setDepthTestEnable)
+    NULL_RECORDER_OP(setDepthWriteEnable)
+    NULL_RECORDER_OP(setDepthCompareOp)
+    NULL_RECORDER_OP(setDepthBoundsTestEnable)
+    NULL_RECORDER_OP(setDepthBounds)
+    NULL_RECORDER_OP(setDepthBiasEnable)
+    NULL_RECORDER_OP(setDepthBias)
+    NULL_RECORDER_OP(setStencilTestEnable)
+    NULL_RECORDER_OP(setStencilOp)
+    NULL_RECORDER_OP(setStencilReference)
+    NULL_RECORDER_OP(setStencilWriteMask)
+    NULL_RECORDER_OP(setStencilCompareMask)
+    NULL_RECORDER_OP(setPrimitiveRestartEnable)
+    NULL_RECORDER_OP(setRasterizerDiscardEnable)
+    NULL_RECORDER_OP(setCullMode)
+    NULL_RECORDER_OP(setFrontFace)
+    NULL_RECORDER_OP(setBlendConstants)
+    NULL_RECORDER_OP(setColorWriteMaskEXT)
+    NULL_RECORDER_OP(setLineWidth)
+    NULL_RECORDER_OP(setAttachmentFeedbackLoopEnableEXT)
+#undef NULL_RECORDER_OP
+};
+} // namespace
+
 void DynamicState::Commit(const Instance& instance, const vk::CommandBuffer& cmdbuf) {
+    CommitTo(instance, cmdbuf);
+}
+
+void DynamicState::MarkCommitted(const Instance& instance) {
+    CommitTo(instance, NullRecorder{});
+}
+
+template <typename Cmd>
+void DynamicState::CommitTo(const Instance& instance, const Cmd& cmdbuf) {
     if (dirty_state.viewports) {
         dirty_state.viewports = false;
         cmdbuf.setViewportWithCount(viewports);
