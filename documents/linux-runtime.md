@@ -109,7 +109,8 @@ above.
 
 Tested (2026-11-23, WSL 2 Ubuntu 24.04 on Windows 11, no GPU: Mesa llvmpipe, the CPU Vulkan driver):
 
-- `tools/linux/build_release.sh --container none` builds from a clean checkout of `linux-build`; the
+- `tools/linux/build_release.sh` builds from a clean checkout of `linux-build`, both in the container
+  (podman 4.9 in WSL) and with `--container none`; the
   binary needs only glibc 2.38 and `libudev`, `libuuid`, `libcap` besides the libraries SDL loads at
   run time.
 - `package_linux.py` builds the package twice byte for byte the same; `package_release.ps1
@@ -134,7 +135,6 @@ Not tested yet:
   used their own v0.4.10 build on an RX 7600).
 - Steam Deck / SteamOS (glibc and Python versions, Gaming Mode), Bazzite, Wayland without XWayland.
 - Online sign-in, matches and `rename` against a server, controllers (SDL gamepad input), audio.
-- The container build (`--container podman|docker`); only the same commands on a WSL host ran.
 
 Known differences from Windows:
 
