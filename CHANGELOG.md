@@ -2,7 +2,7 @@
 
 Changes to CrossCrease NHL 17 releases. Versions follow [semantic versioning](https://semver.org/); the version source of truth is `tools/release/VERSION`. See [RELEASING.md](RELEASING.md) for how releases are built.
 
-## Unreleased
+## 0.4.11 — Lighter graphics work for slower PCs, 720p option
 
 - Graphics option for slower graphics cards: `-Resolution 720p` (new in-memory patch
   `patches/nhl17-resolution-720p.xml`, base game 1.00 and update 1.08) draws the 3D scene at
