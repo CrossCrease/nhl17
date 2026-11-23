@@ -431,6 +431,7 @@ void Rasterizer::OnFence() {
     // just wrote. Submitting now copies those pages at this point, so such a write waits only
     // for the work before the fence instead of draining everything recorded after it.
     if (buffer_cache.HasPendingReadbackSnapshots()) {
+        PERFORMANCE_SCOPE("FlushOnFence");
         scheduler.Flush();
     }
 }

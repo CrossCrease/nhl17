@@ -16,7 +16,7 @@ param(
     [string]$RuntimeDirectory = '',
     [switch]$BaseOnly,
     # Graphics options, passed to run_nhl17.ps1 (see there).
-    [ValidateSet('900p', '1080p', '1440p')][string]$Resolution = '900p',
+    [ValidateSet('720p', '900p', '1080p', '1440p')][string]$Resolution = '900p',
     [ValidateSet(60, 120)][int]$FrameRate = 60,
     # Developer testing: a second player on the same PC (needs its own runtime folder).
     [switch]$AllowMultipleInstances

@@ -100,6 +100,7 @@ void UniqueBuffer::Create(vk::BufferCreateInfo& buffer_ci, MemoryType mem_type,
 
         const VkBufferCreateInfo buffer_ci_unsafe = static_cast<VkBufferCreateInfo>(buffer_ci);
         VkBuffer unsafe_buffer{};
+        PERFORMANCE_SCOPE("CreateVkBuffer");
         VkResult result = vmaCreateBuffer(allocator, &buffer_ci_unsafe, &alloc_ci, &unsafe_buffer,
                                           &allocation, out_alloc_info);
         if (result == VK_ERROR_OUT_OF_DEVICE_MEMORY) {

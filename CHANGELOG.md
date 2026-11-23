@@ -2,6 +2,22 @@
 
 Changes to CrossCrease NHL 17 releases. Versions follow [semantic versioning](https://semver.org/); the version source of truth is `tools/release/VERSION`. See [RELEASING.md](RELEASING.md) for how releases are built.
 
+## Unreleased
+
+- Graphics option for slower graphics cards: `-Resolution 720p` (new in-memory patch
+  `patches/nhl17-resolution-720p.xml`, base game 1.00 and update 1.08) draws the 3D scene at
+  1280x720 instead of the game's own 1600x900 and scales it to the 1080p picture: about a third
+  fewer pixels to draw. Verified on 1.08 in an Overhead match: every scene buffer is 1280x720,
+  gameplay and stoppage close-ups look right.
+- Performance: before every draw the emulator no longer asks the graphics driver how far the GPU
+  has got unless an operation is actually waiting for it. On Linux (AMD/RADV) that query is a
+  kernel call and under Proton/Wine it also goes through the Windows-to-Linux translation, so
+  this saves about 100,000 such calls per second in an Overhead match. On the NVIDIA test PC the
+  time to record a draw changed only from 3.40 to 3.36 µs.
+- Diagnostics: `SHADPS4_PROFILE_SCOPES=1` also counts GPU memory allocations
+  (`ArenaMakeResident`, `ArenaBindSparse`, `CreateVkBuffer`, `CreateVkImage`) and the extra
+  submissions made for readback snapshots (`FlushOnFence`, `FlushSnapshotHit`).
+
 ## 0.4.10 — Smoother Overhead camera on slower PCs
 
 - Performance: less CPU work per draw on the emulator's GPU command thread, which limited the

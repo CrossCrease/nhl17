@@ -479,6 +479,7 @@ void BufferCache::EnsureResident(const Buffer* arena, u64 first_block, u64 last_
     if (bind_ranges.Empty()) {
         return;
     }
+    PERFORMANCE_SCOPE("ArenaMakeResident");
 
     const bool has_bda = instance.IsBufferDeviceAddressSupported();
     const vk::MemoryAllocateFlagsInfo alloc_flags = {
@@ -745,6 +746,7 @@ bool BufferCache::PrepareSnapshotRead(VAddr device_addr, VAddr window_start, VAd
     PERFORMANCE_SCOPE("ReadbackSnapshotHit");
     if (!scheduler.IsFree(read.tick)) {
         // Hand the recorded work to the GPU so it stays busy while the snapshot is awaited.
+        PERFORMANCE_SCOPE("FlushSnapshotHit");
         scheduler.Flush();
     }
     return true;
@@ -890,6 +892,7 @@ void BufferCache::SubmitPendingArenaBinds(Vulkan::SubmitInfo& info) {
     if (pending_binds.empty()) {
         return;
     }
+    PERFORMANCE_SCOPE("ArenaBindSparse");
 
     std::vector<vk::SparseBufferMemoryBindInfo> buffer_binds;
     buffer_binds.reserve(pending_binds.size());

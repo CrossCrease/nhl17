@@ -135,7 +135,20 @@ void Scheduler::Wait(u64 tick) {
 
 void Scheduler::PopPendingOperations() {
     std::unique_lock lk(pending_ops_mutex);
-    work_semaphore.Refresh();
+    // This runs before every draw and dispatch. Ask the driver for the GPU's progress only when
+    // an operation is waiting for it: the query is a kernel call on some drivers and goes
+    // through a translation layer under Wine/Proton. Code that needs a fresh tick refreshes it.
+    if (pending_ops.empty()) {
+        return;
+    }
+    const u64 front_tick = pending_ops.front().gpu_tick;
+    if (!work_semaphore.IsFree(front_tick)) {
+        if (front_tick >= work_semaphore.CurrentTick()) {
+            // Waits for work that has not been submitted yet; the GPU cannot have finished it.
+            return;
+        }
+        work_semaphore.Refresh();
+    }
     while (!pending_ops.empty() && work_semaphore.IsFree(pending_ops.front().gpu_tick)) {
         pending_ops.front().callback();
         pending_ops.pop();
