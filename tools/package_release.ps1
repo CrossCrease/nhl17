@@ -6,6 +6,9 @@
 #   crosscrease-nhl17-runtime-<version>-windows-x64.zip  emulator runtime, default config, launch scripts and,
 #                                                        in online\, the public files for connecting to a CrossCrease server
 #   crosscrease-nhl17-feed.json                          package list with versions, sizes and SHA-256
+#   crosscrease-nhl17-runtime-<version>-linux-x64.tar.gz with -LinuxRuntime <shadps4 built by tools/linux/build_release.sh>:
+#                                                        the same runtime for Linux, built by tools/linux/package_linux.py
+#                                                        (needs Python 3), listed in the feed as runtime-linux-x64
 #   SHA256SUMS.txt
 #
 # Packages are built from an allowlist. Game files, firmware, keys, saves, caches and the developer's
@@ -16,7 +19,8 @@ param(
     [string]$OutputDirectory = '',
     [string]$ServerAddress = '',
     [string]$Repository = 'CrossCrease/nhl17',
-    [string]$MinimumLauncher = '0.7.0'
+    [string]$MinimumLauncher = '0.7.0',
+    [string]$LinuxRuntime = ''
 )
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName System.IO.Compression, System.IO.Compression.FileSystem
@@ -113,6 +117,22 @@ try { [void][Net.Dns]::GetHostAddresses(($defaultServer -split ':')[0]) }
 catch { Write-Warning "The default server $defaultServer does not resolve. Players could not connect; add its DNS record before publishing this package." }
 $runtimePackage = New-Package $runtimeStage "crosscrease-nhl17-runtime-$version-windows-x64.zip"
 
+# Linux runtime package: the same online files (already checked above), built by package_linux.py so the
+# Linux allowlist lives in one place. Its id differs from 'runtime', so Windows launchers ignore it.
+$linuxPackage = $null
+if ($LinuxRuntime) {
+    $linuxArguments = @((Join-Path $PSScriptRoot 'linux\package_linux.py'), '--runtime', (Resolve-Path -LiteralPath $LinuxRuntime).Path,
+        '--online-directory', $onlineStage, '--repository', $Repository, '--output-directory', $out)
+    if (Get-Command py -ErrorAction SilentlyContinue) { $python = 'py'; $linuxArguments = @('-3') + $linuxArguments }
+    elseif (Get-Command python -ErrorAction SilentlyContinue) { $python = 'python' }
+    else { throw 'Python 3 is needed to build the Linux package (py or python on PATH).' }
+    $linuxResult = & $python @linuxArguments
+    if ($LASTEXITCODE -ne 0) { throw "package_linux.py failed ($LASTEXITCODE)" }
+    $linux = ($linuxResult | Select-Object -Last 1) | ConvertFrom-Json
+    Remove-Item -LiteralPath (Join-Path $out ($linux.file + '.sha256'))
+    $linuxPackage = [pscustomobject]@{ File = $linux.file; Size = [long]$linux.size; Sha256 = $linux.sha256 }
+}
+
 Remove-Item -LiteralPath $staging -Recurse -Force
 
 $feed = [ordered]@{
@@ -132,8 +152,15 @@ $feed = [ordered]@{
         }
     )
 }
+if ($linuxPackage) {
+    $feed.packages += [ordered]@{
+        id = 'runtime-linux-x64'; name = 'NHL 17 runtime (Linux)'; version = $version
+        description = 'Native Linux (x86-64) build of the NHL 17 runtime with the online connection files; start it with tools/crosscrease-nhl17.'
+        url = $linuxPackage.File; size = $linuxPackage.Size; sha256 = $linuxPackage.Sha256
+    }
+}
 $feedFile = Join-Path $out 'crosscrease-nhl17-feed.json'
 $feed | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $feedFile -Encoding ASCII
-@($runtimePackage) | ForEach-Object { "$($_.Sha256)  $($_.File)" } |
+@($runtimePackage, $linuxPackage) | Where-Object { $_ } | ForEach-Object { "$($_.Sha256)  $($_.File)" } |
     Set-Content -LiteralPath (Join-Path $out 'SHA256SUMS.txt') -Encoding ASCII
 Get-ChildItem -LiteralPath $out | Select-Object Name, Length

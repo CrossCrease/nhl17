@@ -1,0 +1,2 @@
+# Linux scripts keep LF endings in every checkout; a CR breaks their #! line.
+tools/linux/** text eol=lf

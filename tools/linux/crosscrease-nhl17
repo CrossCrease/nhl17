@@ -1,0 +1,559 @@
+#!/usr/bin/env python3
+# CrossCrease NHL 17 start program for Linux (tools/crosscrease-nhl17 in the Linux runtime package).
+# It is the Linux counterpart of tools\crosscrease-nhl17.exe (tools/start/CrossCreaseNhl17.cs) and takes
+# the same commands and options:
+#
+#   crosscrease-nhl17 play -Game <eboot.bin> [-DataDirectory <folder>] [-ServerAddress <host>] [-OnlineId <id>]
+#                          [-BaseOnly] [-Resolution 720p|900p|1080p|1440p] [-FrameRate 60|120]
+#   crosscrease-nhl17 rename -OnlineId <id> -NewOnlineId <id> [-ServerAddress <host>]
+#
+# Keep it in step with CrossCreaseNhl17.cs. The password comes from the CROSSCREASE_SETTING_PASSWORD
+# environment variable (or -Password); when neither is set and the program runs in a terminal, it asks
+# for it. It never appears on the emulator's command line.
+#
+# Without -DataDirectory the player's data lives in $XDG_DATA_HOME/CrossCrease/games/nhl17 (normally
+# ~/.local/share/CrossCrease/games/nhl17). Every Play writes <data>/logs/online-<time>/launch.log.
+# Needs only Python 3.8+ and its standard library.
+import datetime
+import getpass
+import hashlib
+import json
+import os
+import platform
+import re
+import shutil
+import signal
+import socket
+import ssl
+import struct
+import subprocess
+import sys
+import threading
+import xml.etree.ElementTree as ElementTree
+
+ONLINE_ID = re.compile(r"^[a-zA-Z0-9_-]{3,16}$")
+SERVER = re.compile(r"^[a-zA-Z0-9.:-]+$")
+SWITCHES = {"baseonly", "allowmultipleinstances"}
+EMULATOR = "shadps4"
+TOOLS = os.path.dirname(os.path.realpath(__file__))
+USAGE = ("Usage:\n  crosscrease-nhl17 play -Game <eboot.bin> [-DataDirectory <folder>] [-ServerAddress <host>] [-OnlineId <id>] [-BaseOnly]\n"
+         "                         [-Resolution 720p|900p|1080p|1440p] [-FrameRate 60|120]\n"
+         "  crosscrease-nhl17 rename -OnlineId <id> -NewOnlineId <id> [-ServerAddress <host>]")
+
+
+class Failure(Exception):
+    pass
+
+
+log_file = None
+
+
+def log(message):
+    if log_file is None:
+        return
+    try:
+        log_file.write(datetime.datetime.now().strftime("%H:%M:%S.%f")[:-3] + "  " + message + "\n")
+        log_file.flush()
+    except OSError:
+        pass
+
+
+# ----- Shared -------------------------------------------------------------------------------
+
+def parse_options(args):
+    options = {}
+    i = 0
+    while i < len(args):
+        arg = args[i]
+        if not arg.startswith("-") or len(arg) < 2:
+            raise Failure("Unexpected argument: " + arg)
+        name = arg.lstrip("-").lower()
+        if name in SWITCHES:
+            options[name] = "true"
+        else:
+            if i + 1 >= len(args):
+                raise Failure("Missing value for " + arg)
+            i += 1
+            options[name] = args[i]
+        i += 1
+    return options
+
+
+def option(options, name):
+    value = options.get(name.lower())
+    return value if value else None
+
+
+def package_path(options, name, folder):
+    return os.path.abspath(option(options, name) or os.path.join(TOOLS, "..", folder))
+
+
+def take_password(options):
+    password = option(options, "Password") or os.environ.pop("CROSSCREASE_SETTING_PASSWORD", None)
+    os.environ.pop("CROSSCREASE_SETTING_PASSWORD", None)
+    if password is None and sys.stdin.isatty():
+        password = getpass.getpass("CrossCrease password (Enter for a local test server): ")
+    return password or ""
+
+
+def read_json(path):
+    with open(path, encoding="utf-8-sig") as file:
+        return json.load(file)
+
+
+def write_json(path, value):
+    with open(path, "w", encoding="utf-8") as file:
+        json.dump(value, file, indent=4)
+
+
+def section(parent, name):
+    value = parent.get(name)
+    if not isinstance(value, dict):
+        value = parent[name] = {}
+    return value
+
+
+def text(values, name):
+    value = values.get(name)
+    if value is None:
+        return ""
+    if isinstance(value, bool):
+        return "True" if value else "False"
+    return str(value)
+
+
+def users_of(users):
+    listed = ((users or {}).get("Users") or {}).get("user")
+    if isinstance(listed, dict):
+        return [listed]
+    return [user for user in listed or [] if isinstance(user, dict)]
+
+
+def default_data_directory():
+    base = os.environ.get("XDG_DATA_HOME") or os.path.join(os.path.expanduser("~"), ".local", "share")
+    return os.path.join(base, "CrossCrease", "games", "nhl17")
+
+
+def show_error(message):
+    print(message, file=sys.stderr)
+    if sys.stderr.isatty() or not os.environ.get("DISPLAY") and not os.environ.get("WAYLAND_DISPLAY"):
+        return
+    for command in (["zenity", "--error", "--title=Could not start NHL 17", "--text=" + message],
+                    ["kdialog", "--title", "Could not start NHL 17", "--error", message]):
+        if shutil.which(command[0]):
+            subprocess.run(command, check=False)
+            return
+
+
+# ----- Play ---------------------------------------------------------------------------------
+
+def play(args):
+    global log_file
+    session = None
+    try:
+        options = parse_options(args)
+        game = option(options, "Game")
+        if game is None:
+            raise Failure("Play needs -Game.")
+        data_path = os.path.abspath(os.path.expanduser(option(options, "DataDirectory") or default_data_directory()))
+        user_path = os.path.join(data_path, "user")
+        artifacts = os.path.join(data_path, "logs")
+        session = os.path.join(artifacts, "online-" + datetime.datetime.now().strftime("%Y%m%d-%H%M%S"))
+        os.makedirs(session, exist_ok=True)
+        log_file = open(os.path.join(session, "launch.log"), "w", encoding="utf-8")
+        log("CrossCrease NHL 17 start program (Linux); " + platform.platform() + "; Python " + platform.python_version())
+        return play_session(options, game, data_path, user_path, artifacts, session)
+    except Exception as error:  # noqa: BLE001 - every failure is reported to the player
+        message = str(error) if isinstance(error, Failure) else type(error).__name__ + ": " + str(error)
+        log("Failed: " + repr(error))
+        if log_file is not None:
+            log_file.close()
+        details = "\n\nDetails: " + os.path.join(session, "launch.log") if session else ""
+        show_error(message + details)
+        return 1
+
+
+def running_emulators():
+    found = []
+    for pid in os.listdir("/proc"):
+        if not pid.isdigit():
+            continue
+        try:
+            path = os.readlink("/proc/" + pid + "/exe")
+        except OSError:
+            continue
+        if os.path.basename(path).lower() in (EMULATOR, "shadps4.exe", "shadps4.appimage"):
+            found.append(path)
+    return found
+
+
+def play_session(options, game, data_path, user_path, artifacts, session):
+    base_only = "baseonly" in options
+    allow_multiple = "allowmultipleinstances" in options
+    resolution = (option(options, "Resolution") or "900p").lower()
+    if resolution not in ("720p", "900p", "1080p", "1440p"):
+        raise Failure("Invalid resolution: " + resolution + " (use 720p, 900p, 1080p or 1440p).")
+    frame_rate_text = option(options, "FrameRate") or "60"
+    if frame_rate_text not in ("60", "120"):
+        raise Failure("Invalid frame rate: " + frame_rate_text + " (use 60 or 120).")
+    frame_rate = int(frame_rate_text)
+
+    connection_path = package_path(options, "ConnectionDirectory", "online")
+    connection_file = os.path.join(connection_path, "server_connection.json")
+    if not os.path.isfile(connection_file):
+        raise Failure("The runtime's online connection files are missing (" + connection_path + "). Reinstall the NHL 17 runtime.")
+    connection = read_json(connection_file)
+    server = option(options, "ServerAddress")
+    if server is None or server == "default":
+        server = text(connection, "server_address")
+    if not SERVER.match(server):
+        raise Failure("Invalid server address: " + server)
+    online_id = option(options, "OnlineId") or "NHL17Player"
+    if not ONLINE_ID.match(online_id):
+        raise Failure("Invalid online ID: " + online_id)
+    trust_patch = os.path.join(connection_path, text(connection, "trust_patch_file"))
+    if not os.path.isfile(trust_patch):
+        raise Failure("The server trust patch is missing: " + trust_patch)
+
+    runtime_path = package_path(options, "RuntimeDirectory", "runtime")
+    exe = os.path.join(runtime_path, EMULATOR)
+    if not os.path.isfile(exe):
+        raise Failure("The emulator is missing: " + exe + ". Reinstall the NHL 17 runtime.")
+    game_path = os.path.abspath(os.path.expanduser(game))
+    if not os.path.exists(game_path):
+        raise Failure("The game was not found: " + game_path)
+    password = take_password(options)
+    log("Game " + game_path + (" (base game)" if base_only else "") + "; data " + data_path + "; server " + server +
+        "; online ID " + online_id + "; resolution " + resolution + "; frame rate " + str(frame_rate))
+
+    for path in running_emulators():
+        if os.path.realpath(path) == os.path.realpath(exe):
+            raise Failure("NHL 17 is already running from this runtime.")
+        if not allow_multiple:
+            raise Failure("A shadPS4 game is already running. Close it and press Play again.")
+
+    host_overrides = os.path.join(session, "host_overrides.json")
+    write_json(host_overrides, {"_pack": text(connection, "pack"), "_server": server,
+                                text(connection, "redirector_hostname"): server})
+
+    # Missing defaults are seeded first so there is a profile to back up.
+    os.makedirs(user_path, exist_ok=True)
+    for name in ("config.json", "users.json"):
+        target = os.path.join(user_path, name)
+        if not os.path.isfile(target):
+            shutil.copyfile(os.path.join(runtime_path, "defaults", "user", name), target)
+    config_path = os.path.join(user_path, "config.json")
+    users_path = os.path.join(user_path, "users.json")
+
+    # shadPS4 asks a "Save Migration" question whenever it creates a player's home folder. Nobody can
+    # answer it in a launch without a console, so create the (empty) folders it would create.
+    for player in users_of(read_json(users_path)):
+        player_home = os.path.join(user_path, "home", text(player, "user_id"))
+        if not os.path.isdir(player_home):
+            for folder in ("savedata", "trophy", "inputs"):
+                os.makedirs(os.path.join(player_home, folder), exist_ok=True)
+    if base_only:
+        back_up_saves_for_base_game(game_path, data_path, user_path)
+
+    config_backup = os.path.join(session, "config.before.json")
+    users_backup = os.path.join(session, "users.before.json")
+    shutil.copyfile(config_path, config_backup)
+    shutil.copyfile(users_path, users_backup)
+    try:
+        config = read_json(config_path)
+        network = section(config, "Network")
+        network["connected_to_network"] = True
+        network["shad_net_enabled"] = True
+        # Sign-in is encrypted when the connection files name a TLS port and the CA certificate.
+        ca_certificate = ""
+        identity_port = text(connection, "identity_tcp_port")
+        if text(connection, "identity_tls_port"):
+            identity_port = text(connection, "identity_tls_port")
+            ca_certificate = os.path.abspath(os.path.join(connection_path, text(connection, "identity_ca_certificate_file")))
+            if not os.path.isfile(ca_certificate):
+                raise Failure("The server certificate is missing: " + ca_certificate)
+        network["shadnet_server"] = server + ":" + identity_port
+        network["shadnet_ca_certificate"] = ca_certificate
+        if ca_certificate and text(connection, "psn_webapi_tls_port"):
+            network["shadnet_webapi_server"] = "https://" + server + ":" + text(connection, "psn_webapi_tls_port")
+        else:
+            network["shadnet_webapi_server"] = "http://" + server + ":" + text(connection, "psn_webapi_http_port")
+        section(config, "GPU")["readback_linear_images_enabled"] = True
+        section(config, "GPU")["vblank_frequency"] = frame_rate
+        section(config, "Vulkan")["vkvalidation_enabled"] = False
+        section(config, "Vulkan")["vkvalidation_sync_enabled"] = False
+        section(config, "Log")["filter"] = "*:warning"
+        write_json(config_path, config)
+
+        users = read_json(users_path)
+        user = next((candidate for candidate in users_of(users) if text(candidate, "player_index") == "1"), None)
+        if user is None:
+            raise Failure("No primary emulator user exists in " + users_path + ".")
+        user["shadnet_npid"] = online_id
+        # The emulator takes the password from SHADPS4_SHADNET_PASSWORD, so it is never written to users.json.
+        user["shadnet_password"] = ""
+        user["shadnet_token"] = ""
+        user["shadnet_email"] = ""
+        user["shadnet_enabled"] = True
+        write_json(users_path, users)
+
+        arguments = ["--show-fps", "-g", game_path]
+        if base_only:
+            arguments.append("--ignore-game-patch")
+        patch_file = combine_patches(base_only, resolution, trust_patch, artifacts, "online")
+        if patch_file:
+            arguments += ["-p", patch_file]
+
+        environment = dict(os.environ)
+        for name in ("SHADPS4_LOG_FRAME_STATS", "SHADPS4_PROFILE_SCOPES", "SHADPS4_NET_CAPTURE_DIR", "CROSSCREASE_SETTING_PASSWORD"):
+            environment.pop(name, None)
+        environment.update({
+            "SDL_WINDOW_ACTIVATE_WHEN_SHOWN": "0",
+            "SDL_WINDOW_ACTIVATE_WHEN_RAISED": "0",
+            "SHADPS4_ENABLE_IPC": "false",
+            "SHADPS4_PAD_PIPE": "true",
+            "SHADPS4_BUFFER_READBACK_KIB": "128",
+            "SHADPS4_NET_HOST_OVERRIDES_JSON": host_overrides,
+            "VK_LOADER_LAYERS_DISABLE": "~implicit~",
+            "SHADPS4_SHADNET_PASSWORD": password or "local-only",
+        })
+        password = ""
+
+        log("Starting " + exe + " " + " ".join(arguments))
+        started = datetime.datetime.now()
+        with open(os.path.join(artifacts, "online.stdout.log"), "wb") as stdout, \
+                open(os.path.join(artifacts, "online.stderr.log"), "wb") as stderr:
+            process = subprocess.Popen([exe] + arguments, cwd=data_path, env=environment, stdout=stdout,
+                                       stderr=stderr, stdin=subprocess.DEVNULL)
+            environment = None
+            # Closing the terminal or Ctrl+C closes the game too, and the settings below are still restored.
+            for number in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):
+                signal.signal(number, lambda received, frame: process.send_signal(signal.SIGTERM))
+            with open(os.path.join(artifacts, "online.pid"), "w") as pid_file:
+                pid_file.write(str(process.pid) + "\n")
+            write_run_info(os.path.join(artifacts, "online.run.json"), process.pid, started, exe, game_path, arguments,
+                           config, host_overrides, patch_file, resolution)
+            log("Game process " + str(process.pid) + " started; waiting for it to close.")
+            exit_code = process.wait()
+        log("Game closed with exit code " + str(exit_code) + ".")
+        # The emulator writes user/log/crash.txt itself when it catches a crash. For a crash it cannot
+        # catch (a signal), write one from the exit status so the launcher can still offer to report it.
+        crash_file = os.path.join(user_path, "log", "crash.txt")
+        caught = os.path.isfile(crash_file) and datetime.datetime.fromtimestamp(os.path.getmtime(crash_file)) >= started
+        if exit_code != 0 and not caught:
+            os.makedirs(os.path.dirname(crash_file), exist_ok=True)
+            code = "signal-" + str(-exit_code) if exit_code < 0 else "0x%08x" % exit_code
+            with open(crash_file, "w") as file:
+                file.write("\n".join(["format=1", "kind=exit", "code=" + code, "address=",
+                                      "time=" + datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                                      "log=shad_log.txt"]) + "\n")
+    finally:
+        shutil.copyfile(config_backup, config_path)
+        shutil.copyfile(users_backup, users_path)
+        log("Restored the player's config.json and users.json.")
+    log_file.close()
+    return 0
+
+
+def back_up_saves_for_base_game(game_path, data_path, user_path):
+    # The base game cannot load a profile saved by the update, and its "Create New Profile" replaces it.
+    # When an update exists, keep a copy of the saves before starting the base game (newest 5).
+    game_folder = os.path.dirname(game_path) if os.path.isfile(game_path) else game_path
+    if not os.path.isdir(game_folder + "-UPDATE") and not os.path.isdir(game_folder + "-patch"):
+        return
+    home = os.path.join(user_path, "home")
+    saves = []
+    if os.path.isdir(home):
+        for player in sorted(os.listdir(home)):
+            save = os.path.join(home, player, "savedata")
+            if os.path.isdir(save) and any(files for _, _, files in os.walk(save)):
+                saves.append((player, save))
+    if not saves:
+        return
+    backup_root = os.path.join(data_path, "save-backups")
+    backup = os.path.join(backup_root, datetime.datetime.now().strftime("%Y%m%d-%H%M%S") + "-before-base-game")
+    for player, save in saves:
+        shutil.copytree(save, os.path.join(backup, player, "savedata"))
+    log("Backed up the saves to " + backup + ".")
+    for old in sorted(os.listdir(backup_root), reverse=True)[5:]:
+        shutil.rmtree(os.path.join(backup_root, old), ignore_errors=True)
+
+
+def combine_patches(base_only, resolution, trust_patch, artifacts, label):
+    # shadPS4 takes one patch file. The CrossCrease compatibility patch (update 1.08 only) and the
+    # resolution patch (1.00 and 1.08) are combined with the server trust patch.
+    patches = os.path.join(TOOLS, "..", "patches")
+    files = []
+    compatibility = os.path.abspath(os.path.join(patches, "nhl17-compat.xml"))
+    if not base_only and os.path.isfile(compatibility):
+        files.append(compatibility)
+    if resolution != "900p":
+        resolution_patch = os.path.abspath(os.path.join(patches, "nhl17-resolution-" + resolution + ".xml"))
+        if not os.path.isfile(resolution_patch):
+            raise Failure("The resolution patch is missing: " + resolution_patch + ". Reinstall the NHL 17 runtime.")
+        files.append(resolution_patch)
+    files.append(os.path.abspath(trust_patch))
+    if len(files) == 1:
+        return files[0]
+    combined = ElementTree.parse(files[0])
+    for path in files[1:]:
+        for metadata in ElementTree.parse(path).getroot().findall("Metadata"):
+            combined.getroot().append(metadata)
+    output = os.path.join(artifacts, label + ".patch.xml")
+    combined.write(output, encoding="utf-8", xml_declaration=True)
+    return output
+
+
+def write_run_info(path, pid, started, exe, game_path, arguments, config, host_overrides, patch_file, resolution):
+    digest = hashlib.sha256()
+    with open(exe, "rb") as file:
+        for chunk in iter(lambda: file.read(1 << 20), b""):
+            digest.update(chunk)
+    gpu = section(config, "GPU")
+    info = {
+        "ProcessId": pid,
+        "StartedUtc": started.astimezone(datetime.timezone.utc).isoformat(),
+        "Executable": exe,
+        "ExecutableSha256": digest.hexdigest().upper(),
+        "Game": game_path,
+        "Arguments": subprocess.list2cmdline(arguments),
+        "Validation": False,
+        "FrameStats": False,
+        "ProfileScopes": False,
+        "ImplicitOverlaysDisabled": True,
+        "BufferReadbackWindowKiB": 128,
+    }
+    for key, name in (("GpuReadbacksMode", "readbacks_mode"), ("LinearImageReadbacks", "readback_linear_images_enabled"),
+                      ("FastShaderMath", "fast_shader_math"), ("VblankFrequency", "vblank_frequency"),
+                      ("InternalWidth", "internal_screen_width"), ("InternalHeight", "internal_screen_height"),
+                      ("PresentMode", "present_mode")):
+        info[key] = gpu.get(name)
+    info.update({"NetworkCaptureDirectory": None, "NetworkHostOverridesJson": host_overrides, "Resolution": resolution,
+                 "PatchFile": patch_file or "", "StartProgram": "crosscrease-nhl17 (Linux)", "Wine": None})
+    write_json(path, info)
+
+
+# ----- Rename -------------------------------------------------------------------------------
+# Renames a player's online ID on a CrossCrease server; the account keeps HUT, stats, friends and the
+# password. Prints one line for the player and exits with 0 when the server renamed the account.
+
+def rename(args):
+    try:
+        print(rename_on_server(parse_options(args)))
+        return 0
+    except Failure as failure:
+        print(failure)
+        return 1
+    except Exception as error:  # noqa: BLE001
+        print("The rename failed: " + str(error))
+        return 1
+
+
+def field(number, value):
+    data = value.encode("utf-8")
+    if len(data) > 127:
+        raise Failure("A value is too long.")
+    return bytes([(number << 3) | 2, len(data)]) + data
+
+
+def read_exact(stream, count):
+    data = b""
+    while len(data) < count:
+        chunk = stream.recv(count - len(data))
+        if not chunk:
+            raise OSError("The server closed the connection.")
+        data += chunk
+    return data
+
+
+def rename_on_server(options):
+    online_id = option(options, "OnlineId") or ""
+    new_online_id = option(options, "NewOnlineId") or ""
+    if not ONLINE_ID.match(online_id):
+        raise Failure("Invalid online ID: " + online_id)
+    password = take_password(options)
+    if not password:
+        raise Failure("Enter your password in the launcher first.")
+    connection_path = package_path(options, "ConnectionDirectory", "online")
+    try:
+        connection = read_json(os.path.join(connection_path, "server_connection.json"))
+    except (OSError, ValueError):
+        raise Failure("The runtime's online connection files are missing (" + connection_path + ").")
+    server = option(options, "ServerAddress")
+    if server is None or server == "default":
+        server = text(connection, "server_address")
+    if not SERVER.match(server):
+        raise Failure("Invalid server address: " + server)
+    port = int(text(connection, "identity_tcp_port"))
+    context = None
+    if text(connection, "identity_tls_port"):
+        port = int(text(connection, "identity_tls_port"))
+        ca_file = os.path.join(connection_path, text(connection, "identity_ca_certificate_file"))
+        if not os.path.isfile(ca_file):
+            raise Failure("The runtime's server certificate is missing (" + connection_path + ").")
+        # Accepts only a server certificate issued by the CrossCrease CA from the connection files.
+        context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+        context.minimum_version = ssl.TLSVersion.TLSv1_2
+        context.maximum_version = ssl.TLSVersion.TLSv1_2
+        context.check_hostname = False
+        context.load_verify_locations(ca_file)
+
+    # ShadNet packet: u8 type, u16 command, u32 total size, u64 packet id, then the payload.
+    change_online_id = 50
+    message = field(1, online_id) + field(2, password) + field(3, new_online_id)
+    password = ""
+    packet = struct.pack("<BHIQI", 0, change_online_id, 15 + 4 + len(message), 1, len(message)) + message
+    try:
+        raw = socket.create_connection((server, port), timeout=10)
+    except OSError:
+        raise Failure("Could not reach the server at " + server + ":" + str(port) + ". Check the Server setting and your connection.")
+    try:
+        raw.settimeout(15)
+        stream = context.wrap_socket(raw, server_hostname=server) if context else raw
+        with stream:
+            stream.sendall(packet)
+            while True:
+                header = read_exact(stream, 15)
+                kind, command, size = header[0], struct.unpack_from("<H", header, 1)[0], struct.unpack_from("<I", header, 3)[0]
+                body = read_exact(stream, size - 15) if size > 15 else b""
+                if kind != 1 or command != change_online_id:
+                    continue
+                code = body[0] if body else 33
+                # Reply: error byte, u32 length, protobuf with the player message as string 1.
+                reply = ""
+                if len(body) > 6 and body[5] == 0x0A:
+                    length, shift, offset = 0, 0, 6
+                    while offset < len(body):
+                        value = body[offset]
+                        length |= (value & 0x7F) << shift
+                        shift += 7
+                        offset += 1
+                        if value < 0x80:
+                            break
+                    reply = body[offset:offset + length].decode("utf-8", "replace")
+                if code == 0:
+                    return reply or "Renamed to " + new_online_id + "."
+                if code == 33 and not reply:
+                    raise Failure("This server cannot rename accounts yet. Ask the server operator.")
+                raise Failure("The server did not rename the account: " + reply + "." if reply
+                              else "The server did not rename the account (error " + str(code) + ").")
+    except Failure:
+        raise
+    except Exception as error:  # noqa: BLE001
+        raise Failure("The server did not answer the rename request: " + str(error))
+    finally:
+        raw.close()
+
+
+def main(argv):
+    command = argv[0].lower() if argv else ""
+    if command == "rename":
+        return rename(argv[1:])
+    if command == "play":
+        return play(argv[1:])
+    print(USAGE, file=sys.stderr)
+    return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

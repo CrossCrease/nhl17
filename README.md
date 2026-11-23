@@ -24,6 +24,8 @@ Most players never build this project. They use the [CrossCrease launcher](https
 - Your own copy of NHL 17 for PS4 (CUSA04326 or CUSA04330), dumped from your own console, with update **1.08**. Put the update next to the game folder, in a folder with the same name plus `-UPDATE`.
 - Windows 10/11 x64 and a Vulkan-capable GPU.
 
+On Linux, players currently run the Windows runtime under Proton. A native Linux runtime is in development; see [documents/linux-runtime.md](documents/linux-runtime.md).
+
 CrossCrease never includes or downloads game files, console firmware, keys or saves.
 
 ## Repository layout
@@ -38,6 +40,7 @@ CrossCrease never includes or downloads game files, console firmware, keys or sa
 | `tools/run_nhl17_online.ps1`, `tools/rename_online_id.ps1` | The same as `crosscrease-nhl17.exe play` / `rename`, as PowerShell scripts: what launchers up to 0.9.0 run, and handy for developer tests. |
 | `tools/run_nhl17_server.ps1` | Developer toggle between offline, CrossCrease and custom servers. See [SERVER-CONNECTION.md](SERVER-CONNECTION.md). |
 | `tools/control_nhl17.ps1`, `tools/capture_nhl17_window.ps1` | Developer automation: press pad buttons and take window screenshots. With a game started by `tools/run_nhl17.ps1` (which sets `SHADPS4_PAD_PIPE=true`), buttons go through the emulator's local pad pipe `\\.\pipe\shadps4-pad-<pid>`, so the game window does not need focus; screenshots work while it is covered but not minimised. |
+| `tools/linux/` | Native Linux runtime (in development): `build_release.sh` and `Containerfile` build `shadps4` reproducibly, `package_linux.py` builds the `linux-x64` package, and `crosscrease-nhl17` is the Linux start program (same `play` and `rename` as `crosscrease-nhl17.exe`). See [documents/linux-runtime.md](documents/linux-runtime.md). |
 | `tools/package_release.ps1`, `tools/release/` | Build the downloadable release packages. See [RELEASING.md](RELEASING.md). |
 | `tools/hardware/` | Hardware tests used to verify emulation changes. |
 | `tools/*.py`, other `tools/*.ps1` | Developer analysis and capture tools. |
@@ -55,7 +58,7 @@ cd nhl17
 powershell -NoProfile -ExecutionPolicy Bypass -File tools\build_windows.ps1
 ```
 
-Copy the resulting `shadPS4.exe` and the Visual C++ runtime DLLs into `runtime\`, put your game in `game\` (and the update in `game-UPDATE\`), then run `tools\run_nhl17.ps1`. For other platforms see the upstream build documents in [documents/](documents/).
+Copy the resulting `shadPS4.exe` and the Visual C++ runtime DLLs into `runtime\`, put your game in `game\` (and the update in `game-UPDATE\`), then run `tools\run_nhl17.ps1`. On Linux, `tools/linux/build_release.sh` builds and packages the native runtime in a container; see [documents/linux-runtime.md](documents/linux-runtime.md). For other platforms see the upstream build documents in [documents/](documents/).
 
 ## Releases and versioning
 

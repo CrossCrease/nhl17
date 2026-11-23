@@ -9,8 +9,9 @@ CrossCrease players never build this project. The CrossCrease launcher downloads
 | File | Contents |
 | --- | --- |
 | `crosscrease-nhl17-runtime-<version>-windows-x64.zip` | `runtime\shadPS4.exe` and its Visual C++ runtime DLLs, `runtime\defaults\user\` (default `config.json` and `users.json`), `tools\crosscrease-nhl17.exe` (built from `tools\start\CrossCreaseNhl17.cs` by `tools\build_start_program.ps1`), `tools\run_nhl17.ps1`, `tools\run_nhl17_online.ps1`, `tools\rename_online_id.ps1`, `LICENSE`, `LICENSES\`, a `README.txt` that names the exact source tag, and `online\`: the public client files from the Blaze project's NHL 17 player pack (`server_connection.json`, `requirements.json`, `README.md`, and `generated\` with the server's public CA certificate, trust patch and trust manifest). |
+| `crosscrease-nhl17-runtime-<version>-linux-x64.tar.gz` | Only with `-LinuxRuntime` (native Linux runtime, in development on `linux-build`): the same contents for Linux, with `runtime/shadps4` and the start program `tools/crosscrease-nhl17` (Python 3). Listed in the feed as `runtime-linux-x64`, which Windows launchers ignore. See [documents/linux-runtime.md](documents/linux-runtime.md). |
 | `crosscrease-nhl17-feed.json` | The list the launcher reads: release version, minimum launcher version, and each package's version, size and SHA-256. |
-| `SHA256SUMS.txt` | Checksum of the ZIP file. |
+| `SHA256SUMS.txt` | Checksums of the packages. |
 
 Packages are built from an allowlist. The script never includes game files, `game-UPDATE`, console firmware, `keys.json`, saves, caches, logs, or the developer's `runtime\user` folder. It refuses to package if any of the online files contains a PEM private key or if the trust manifest reports one.
 
@@ -30,6 +31,8 @@ Packages are built from an allowlist. The script never includes game files, `gam
    ```
 
    Public releases use `nhl17.crosscrease.com` as the default server. Each CrossCrease game server has its own host name, `<game id>.crosscrease.com`, so one game's server can move to another machine by changing one DNS record. Releases up to 0.4.0 use `crosscrease.com`, so that name must keep pointing at the NHL 17 server while those releases are in use.
+
+   For the Linux package, first build the emulator from the same commit with `tools/linux/build_release.sh --no-package` (in a container; WSL works) and add `-LinuxRuntime <path>/shadps4`.
 
    Options: `-ServerAddress <host>` sets the default server in `online\server_connection.json` (without it the package keeps the developer default `127.0.0.1`; the script warns when the default is loopback or private, or does not resolve), `-MinimumLauncher <version>` sets the oldest launcher that may install this release, and `-OnlineDirectory` / `-RuntimeDirectory` select other inputs.
 5. Test it with the launcher before publishing: put the feed into `%LOCALAPPDATA%\CrossCrease\feeds.json` (see the launcher README), then download, play and update through the launcher.

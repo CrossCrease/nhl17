@@ -2,6 +2,17 @@
 
 Changes to CrossCrease NHL 17 releases. Versions follow [semantic versioning](https://semver.org/); the version source of truth is `tools/release/VERSION`. See [RELEASING.md](RELEASING.md) for how releases are built.
 
+## Unreleased
+
+- Native Linux runtime (in development, `linux-build` branch): `tools/linux/build_release.sh` builds
+  the emulator for Linux x86-64 in an Ubuntu 24.04 container (Clang 19 as in upstream CI, C++ runtime linked in,
+  glibc 2.39+), and `tools/linux/package_linux.py` builds a reproducible
+  `crosscrease-nhl17-runtime-<version>-linux-x64.tar.gz` with the same contents as the Windows
+  package. `tools/linux/crosscrease-nhl17` (Python 3) is the Linux start program, with the same
+  `play` and `rename` commands as `crosscrease-nhl17.exe`. `tools\package_release.ps1 -LinuxRuntime`
+  adds the package to the release, its checksums and the feed as `runtime-linux-x64`, which
+  Windows launchers ignore. See `documents/linux-runtime.md`.
+
 ## 0.4.11 — Lighter graphics work for slower PCs, 720p option
 
 - Graphics option for slower graphics cards: `-Resolution 720p` (new in-memory patch
