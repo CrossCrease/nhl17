@@ -187,6 +187,7 @@ void Rasterizer::Draw(bool is_indexed, u32 index_offset) {
     PERFORMANCE_SCOPE("RecordDraw");
     RENDERER_TRACE;
 
+    scheduler.ResumeThreadedRecording();
     scheduler.PopPendingOperations();
 
     if (!FilterDraw()) {
@@ -246,6 +247,7 @@ void Rasterizer::DrawIndirect(bool is_indexed, VAddr arg_address, u32 offset, u3
                               u16 instance_sgpr_offset) {
     RENDERER_TRACE;
 
+    scheduler.ResumeThreadedRecording();
     scheduler.PopPendingOperations();
 
     if (!FilterDraw()) {
@@ -331,6 +333,7 @@ void Rasterizer::DispatchDirect() {
     PERFORMANCE_SCOPE("RecordDispatch");
     RENDERER_TRACE;
 
+    scheduler.ResumeThreadedRecording();
     scheduler.PopPendingOperations();
 
     const auto& cs_program = liverpool->GetCsRegs();
@@ -389,6 +392,7 @@ void Rasterizer::DispatchDirect() {
 void Rasterizer::DispatchIndirect(VAddr address, u32 offset, u32 size) {
     RENDERER_TRACE;
 
+    scheduler.ResumeThreadedRecording();
     scheduler.PopPendingOperations();
 
     const auto& cs_program = liverpool->GetCsRegs();

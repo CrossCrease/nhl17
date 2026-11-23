@@ -11,7 +11,7 @@
 
 namespace Vulkan {
 
-std::mutex Scheduler::submit_mutex;
+std::recursive_mutex Scheduler::submit_mutex;
 
 Scheduler::Scheduler(const Instance& instance, bool threaded_recording)
     : instance{instance}, work_semaphore{instance}, command_pool{instance, &work_semaphore},
@@ -23,6 +23,9 @@ Scheduler::Scheduler(const Instance& instance, bool threaded_recording)
     priority_pending_ops_thread =
         std::jthread(std::bind_front(&Scheduler::PriorityPendingOpsThread, this));
     if (threaded) {
+        // From here on only the recording thread records into, ends, submits and begins the
+        // primary command buffers, and only it uses command_pool.
+        recorder_primary = sessions.back().primary;
         chunk = std::make_unique<CommandChunk>();
         recording_thread = std::jthread(std::bind_front(&Scheduler::RecordingThread, this));
     }
@@ -43,7 +46,6 @@ void Scheduler::DispatchChunk() {
     if (chunk->Empty()) {
         return;
     }
-    chunk->target = sessions.back().primary;
     std::unique_ptr<CommandChunk> next;
     {
         std::scoped_lock lk{chunk_mutex};
@@ -96,7 +98,7 @@ void Scheduler::RecordingThread(std::stop_token stoken) {
             work = std::move(chunk_queue.front());
             chunk_queue.pop();
         }
-        work->Execute(work->target);
+        work->Execute(recorder_primary);
         work->Reset();
         {
             std::scoped_lock lk{chunk_mutex};
@@ -285,8 +287,86 @@ void Scheduler::EndSession() {
     Check(session.primary.end());
 }
 
+void Scheduler::SubmitThreaded(SubmitInfo& info) {
+    // The callbacks may wait for the recording thread, which may be waiting for the queue
+    // lock to submit earlier work, so they run without holding it.
+    const u64 signal_value = work_semaphore.NextTick();
+    if (on_submit) {
+        on_submit(info);
+    }
+    if (on_session) {
+        on_session();
+    }
+    const vk::CommandBuffer upload = sessions.back().upload;
+    if (upload) {
+        Check(upload.end());
+    }
+    EndRendering();
+    {
+        std::scoped_lock lk{submit_mutex};
+        ImGui::Core::TextureManager::Submit();
+    }
+    info.AddSignal(work_semaphore.Handle(), signal_value);
+    sessions.clear();
+    sessions.emplace_back();
+    // The next command buffer starts without state.
+    dynamic_state.Invalidate();
+
+    // Anything recorded directly is already in the command buffer and the recording thread is
+    // idle, so the submission can always go through the queue.
+    direct_mode = false;
+    Record([this, info, upload](vk::CommandBuffer) { RecorderSubmit(info, upload); });
+    DispatchChunk();
+
+    PopPendingOperations();
+}
+
+void Scheduler::RecorderSubmit(SubmitInfo info, vk::CommandBuffer upload) {
+    Check(recorder_primary.end());
+    std::array<vk::CommandBuffer, 2> cmd_buffers;
+    u32 num_cmd_buffers = 0;
+    if (upload) {
+        cmd_buffers[num_cmd_buffers++] = upload;
+    }
+    cmd_buffers[num_cmd_buffers++] = recorder_primary;
+
+    std::array<vk::PipelineStageFlags, std::tuple_size_v<decltype(info.wait_semas)>>
+        wait_stage_masks;
+    wait_stage_masks.fill(vk::PipelineStageFlagBits::eAllCommands);
+    const vk::TimelineSemaphoreSubmitInfo timeline_si = {
+        .waitSemaphoreValueCount = info.num_wait_semas,
+        .pWaitSemaphoreValues = info.wait_ticks.data(),
+        .signalSemaphoreValueCount = info.num_signal_semas,
+        .pSignalSemaphoreValues = info.signal_ticks.data(),
+    };
+    const vk::SubmitInfo submit_info = {
+        .pNext = &timeline_si,
+        .waitSemaphoreCount = info.num_wait_semas,
+        .pWaitSemaphores = info.wait_semas.data(),
+        .pWaitDstStageMask = wait_stage_masks.data(),
+        .commandBufferCount = num_cmd_buffers,
+        .pCommandBuffers = cmd_buffers.data(),
+        .signalSemaphoreCount = info.num_signal_semas,
+        .pSignalSemaphores = info.signal_semas.data(),
+    };
+    {
+        std::scoped_lock lk{submit_mutex};
+        const auto submit_result = instance.GetGraphicsQueue().submit(submit_info, info.fence);
+        ASSERT_MSG(submit_result != vk::Result::eErrorDeviceLost, "Device lost during submit");
+    }
+
+    recorder_primary = command_pool.Commit();
+    Check(recorder_primary.begin(vk::CommandBufferBeginInfo{
+        .flags = vk::CommandBufferUsageFlagBits::eOneTimeSubmit,
+    }));
+}
+
 void Scheduler::SubmitExecution(SubmitInfo& info) {
     PERFORMANCE_SCOPE("SubmitExecution");
+    if (threaded) {
+        SubmitThreaded(info);
+        return;
+    }
     std::scoped_lock lk{submit_mutex};
     const u64 signal_value = work_semaphore.NextTick();
 

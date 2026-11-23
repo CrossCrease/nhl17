@@ -922,6 +922,9 @@ void BufferCache::SubmitPendingArenaBinds(Vulkan::SubmitInfo& info) {
     };
 
     info.AddWait(signal_sema, signal_tick);
+    // Usually called during a submission, which already holds the lock; with threaded
+    // recording the submission runs this without it.
+    std::scoped_lock queue_lock{Vulkan::Scheduler::submit_mutex};
     auto submit_result = instance.GetGraphicsQueue().bindSparse(sparse_info);
     ASSERT_MSG(submit_result != vk::Result::eErrorDeviceLost, "Device lost during submit");
 

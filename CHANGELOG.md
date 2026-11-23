@@ -14,14 +14,17 @@ Changes to CrossCrease NHL 17 releases. Versions follow [semantic versioning](ht
   kernel call and under Proton/Wine it also goes through the Windows-to-Linux translation, so
   this saves about 100,000 such calls per second in an Overhead match. On the NVIDIA test PC the
   time to record a draw changed only from 3.40 to 3.36 µs.
-- Performance: draw, dispatch, barrier and buffer-copy commands are now recorded into Vulkan on
-  a thread of their own (`shadPS4:GpuCommandRecorder`), so the graphics driver's recording cost
-  leaves the GPU command thread. Other recording waits for that thread first, so it stays in
-  order. In an Overhead CPU-vs-CPU match on the NVIDIA test PC the time to record a draw fell
-  from 3.36 to 2.98 µs and the GPU command thread's busy time from 439 to 413 ms per second.
-  The gain should be larger under Proton, where every Vulkan call also passes through Wine (not
-  measured). `SHADPS4_THREADED_RECORDING=0` turns it off. Frame statistics now also report
-  `recording_syncs` (waits for the recording thread) and `recorded_commands`.
+- Performance: draw, dispatch, barrier and buffer-copy commands, and the submission of each
+  command buffer to the GPU, are now done by a thread of their own
+  (`shadPS4:GpuCommandRecorder`), so most of the graphics driver's cost leaves the GPU command
+  thread. Code that records into the command buffer directly first waits for that thread and
+  then records in place until the next draw, so the order of commands is unchanged. In an
+  Overhead CPU-vs-CPU match on the NVIDIA test PC (same build, on vs off) the GPU command
+  thread's busy time fell from 427 to 379 ms per second, the time to record a draw from 3.33 to
+  2.95 µs and a submission from 16 to 11 µs. The gain should be larger under Proton, where
+  every Vulkan call also passes through Wine (not measured). `SHADPS4_THREADED_RECORDING=0`
+  turns it off. Frame statistics now also report `recording_syncs` (waits for the recording
+  thread), `recorded_commands` and `direct_recordings`.
 - Diagnostics: `SHADPS4_PROFILE_SCOPES=1` also counts GPU memory allocations
   (`ArenaMakeResident`, `ArenaBindSparse`, `CreateVkBuffer`, `CreateVkImage`) and the extra
   submissions made for readback snapshots (`FlushOnFence`, `FlushSnapshotHit`).

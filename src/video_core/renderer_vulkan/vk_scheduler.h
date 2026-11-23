@@ -431,7 +431,9 @@ public:
         return true;
     }
 
-    void Execute(vk::CommandBuffer cmdbuf) const {
+    /// Runs the commands. cmdbuf is read again for every command: a submit command switches
+    /// it to the next command buffer.
+    void Execute(const vk::CommandBuffer& cmdbuf) const {
         for (const Command* command = first; command; command = command->next) {
             command->Execute(cmdbuf);
         }
@@ -447,8 +449,6 @@ public:
         offset = 0;
         count = 0;
     }
-
-    vk::CommandBuffer target{};
 
 private:
     struct Command {
@@ -535,17 +535,28 @@ public:
     }
 
     /// Returns the current command buffer for direct recording. Waits until every command
-    /// passed to Record() has been recorded into it.
+    /// passed to Record() has been recorded into it. Callers keep using the returned buffer
+    /// while calling code that uses Record(), so from here on Record() runs immediately, in
+    /// order with the direct recording, until ResumeThreadedRecording().
     vk::CommandBuffer CommandBuffer() {
-        if (threaded) {
+        if (threaded && !direct_mode) {
             SyncRecording();
+            direct_mode = true;
+            direct_entries.store(direct_entries.load(std::memory_order_relaxed) + 1,
+                                 std::memory_order_relaxed);
         }
-        return sessions.back().primary;
+        return CurrentPrimary();
     }
 
-    /// Whether Record() hands commands to the recording thread.
+    /// Hands Record() commands to the recording thread again. Called where no direct
+    /// recording can still be in progress: at the start of a draw or dispatch.
+    void ResumeThreadedRecording() noexcept {
+        direct_mode = false;
+    }
+
+    /// Whether Record() currently hands commands to the recording thread.
     [[nodiscard]] bool IsThreaded() const noexcept {
-        return threaded;
+        return threaded && !direct_mode;
     }
 
     /// Records a command. func(vk::CommandBuffer) runs later on the recording thread, in order
@@ -553,8 +564,8 @@ public:
     /// or point to data copied with StreamCopy(). Without threaded recording it runs now.
     template <typename F>
     void Record(F&& func) {
-        if (!threaded) {
-            func(sessions.back().primary);
+        if (!IsThreaded()) {
+            func(CurrentPrimary());
             return;
         }
         if (!chunk->Record(func)) {
@@ -572,7 +583,7 @@ public:
     /// Makes sure the next bytes of StreamCopy() data and the Record() call that uses them land
     /// in the same chunk. Call it before StreamCopy().
     void Reserve(size_t bytes) {
-        if (threaded && chunk->Free() < bytes + 2048) {
+        if (IsThreaded() && chunk->Free() < bytes + 2048) {
             DispatchChunk();
         }
     }
@@ -581,7 +592,7 @@ public:
     /// Record() call has run. Without threaded recording the original data is returned.
     template <typename T>
     const T* StreamCopy(const T* data, size_t count) {
-        if (!threaded || count == 0) {
+        if (!IsThreaded() || count == 0) {
             return data;
         }
         void* const ptr = chunk->Allocate(sizeof(T) * count, alignof(T));
@@ -598,10 +609,12 @@ public:
     struct RecordingStats {
         u64 syncs;
         u64 commands;
+        u64 direct;
     };
     RecordingStats GetRecordingStats() const noexcept {
         return {sync_count.load(std::memory_order_relaxed),
-                recorded_commands.load(std::memory_order_relaxed)};
+                recorded_commands.load(std::memory_order_relaxed),
+                direct_entries.load(std::memory_order_relaxed)};
     }
 
     /// Returns the current command buffer tick.
@@ -640,12 +653,27 @@ public:
         priority_pending_ops_cv.notify_one();
     }
 
-    static std::mutex submit_mutex;
+    /// Serializes use of the graphics queue. Recursive: code run during a submission may take
+    /// it again (sparse binding in the submit callback).
+    static std::recursive_mutex submit_mutex;
 
 private:
     void EndSession();
 
     void SubmitExecution(SubmitInfo& info);
+
+    /// Threaded recording: prepares the submission here and hands the end of the command
+    /// buffer, the queue submission and the start of the next one to the recording thread.
+    void SubmitThreaded(SubmitInfo& info);
+
+    /// Recording thread side of SubmitThreaded.
+    void RecorderSubmit(SubmitInfo info, vk::CommandBuffer upload);
+
+    /// The primary command buffer being recorded. With threaded recording it belongs to the
+    /// recording thread; other threads may use it only after SyncRecording().
+    vk::CommandBuffer CurrentPrimary() const noexcept {
+        return threaded ? recorder_primary : sessions.back().primary;
+    }
 
     void PriorityPendingOpsThread(std::stop_token stoken);
 
@@ -683,6 +711,8 @@ private:
     // Threaded recording. Commands are handed over in chunks of up to this many.
     static constexpr u32 DispatchThreshold = 384;
     bool threaded{};
+    bool direct_mode{};
+    vk::CommandBuffer recorder_primary{};
     CommandPool upload_pool;
     std::unique_ptr<CommandChunk> chunk;
     std::mutex chunk_mutex;
@@ -696,6 +726,7 @@ private:
     std::condition_variable done_cv;
     std::atomic<u64> sync_count{};
     std::atomic<u64> recorded_commands{};
+    std::atomic<u64> direct_entries{};
     std::jthread recording_thread;
 };
 
